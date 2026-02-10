@@ -1,5 +1,5 @@
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use crossterm::event::{self, Event};
@@ -22,6 +22,7 @@ pub async fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Ap
     while !app.should_quit {
         tokio::select! {
             _ = interval.tick() => {
+                app.tick_clear_errors();
                 app.refresh_sessions().await?;
                 let _ = app.refresh_preview().await;
                 terminal.draw(|frame| crate::ui::render(frame, app))?;
@@ -29,9 +30,10 @@ pub async fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Ap
             maybe_event = events.recv() => {
                 match maybe_event {
                     Some(Ok(event)) => {
+                        let is_resize = matches!(event, Event::Resize(_, _));
                         let previous_selected = app.selected;
                         app.handle_event(event).await?;
-                        if app.selected != previous_selected {
+                        if app.selected != previous_selected || is_resize {
                             let _ = app.refresh_preview().await;
                         }
                         terminal.draw(|frame| crate::ui::render(frame, app))?;

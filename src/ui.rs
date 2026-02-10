@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -19,30 +19,165 @@ pub fn render(frame: &mut Frame, app: &App) {
     ])
     .split(frame.area());
 
-    let header = Paragraph::new("tmx | ? help | q quit")
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
-    frame.render_widget(header, chunks[0]);
+    render_header(frame, app, chunks[0]);
 
-    let main_chunks = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(chunks[1]);
+    let main_chunks = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
 
     render_session_list(frame, app, main_chunks[0]);
     render_preview(frame, app, main_chunks[1]);
+    render_status_bar(frame, app, chunks[2]);
 
-    let tag_indicator = app.tag_filter.as_ref()
+    if app.show_help {
+        render_help_overlay(frame);
+    }
+}
+
+fn render_header(frame: &mut Frame, app: &App, area: Rect) {
+    let session_info = if app.sessions.is_empty() {
+        String::new()
+    } else {
+        format!(" ({} sessions)", app.sessions.len())
+    };
+    let header = Paragraph::new(format!("tmx{session_info} | ? help | q quit"))
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    frame.render_widget(header, area);
+}
+
+fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    if let Some(ref err) = app.error_message {
+        let error_bar = Paragraph::new(err.as_str()).style(
+            Style::default()
+                .bg(Color::Red)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+        frame.render_widget(error_bar, area);
+        return;
+    }
+
+    let tag_indicator = app
+        .tag_filter
+        .as_ref()
         .map(|t| format!(" [tag:{t}]"))
         .unwrap_or_default();
+
+    let selected_info = app
+        .sessions
+        .get(app.selected)
+        .map(|s| {
+            let status = if s.attached > 0 {
+                "attached"
+            } else {
+                "detached"
+            };
+            format!(" | {} ({status})", s.name)
+        })
+        .unwrap_or_default();
+
     let footer_text = match app.mode {
-        AppMode::Normal => format!("NORMAL{tag_indicator} | {}", app.status_message),
+        AppMode::Normal => format!(
+            "NORMAL{tag_indicator}{selected_info} | {}",
+            app.status_message
+        ),
         AppMode::Search => format!("SEARCH /{}", app.input_buffer),
         AppMode::Input(_) => format!("INPUT  {}", app.input_buffer),
         AppMode::Confirm(_) => format!("CONFIRM | {}", app.status_message),
     };
-    let footer = Paragraph::new(footer_text).style(Style::default().bg(Color::Blue).fg(Color::White));
-    frame.render_widget(footer, chunks[2]);
+    let footer =
+        Paragraph::new(footer_text).style(Style::default().bg(Color::Blue).fg(Color::White));
+    frame.render_widget(footer, area);
+}
+
+fn render_help_overlay(frame: &mut Frame) {
+    let area = frame.area();
+    let popup_width = 50u16.min(area.width.saturating_sub(4));
+    let popup_height = 18u16.min(area.height.saturating_sub(4));
+
+    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let help_lines = vec![
+        Line::from(Span::styled(
+            "Keybindings",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("j/k  ", Style::default().fg(Color::Yellow)),
+            Span::raw("Move down/up"),
+        ]),
+        Line::from(vec![
+            Span::styled("G    ", Style::default().fg(Color::Yellow)),
+            Span::raw("Jump to last"),
+        ]),
+        Line::from(vec![
+            Span::styled("gg   ", Style::default().fg(Color::Yellow)),
+            Span::raw("Jump to first"),
+        ]),
+        Line::from(vec![
+            Span::styled("Enter", Style::default().fg(Color::Yellow)),
+            Span::raw(" Attach to session"),
+        ]),
+        Line::from(vec![
+            Span::styled("n    ", Style::default().fg(Color::Yellow)),
+            Span::raw("New session"),
+        ]),
+        Line::from(vec![
+            Span::styled("r    ", Style::default().fg(Color::Yellow)),
+            Span::raw("Rename session"),
+        ]),
+        Line::from(vec![
+            Span::styled("dd   ", Style::default().fg(Color::Yellow)),
+            Span::raw("Kill session"),
+        ]),
+        Line::from(vec![
+            Span::styled("D    ", Style::default().fg(Color::Yellow)),
+            Span::raw("Detach clients"),
+        ]),
+        Line::from(vec![
+            Span::styled("/    ", Style::default().fg(Color::Yellow)),
+            Span::raw("Fuzzy search"),
+        ]),
+        Line::from(vec![
+            Span::styled("t    ", Style::default().fg(Color::Yellow)),
+            Span::raw("Add tag"),
+        ]),
+        Line::from(vec![
+            Span::styled("T    ", Style::default().fg(Color::Yellow)),
+            Span::raw("Filter by tag / clear"),
+        ]),
+        Line::from(vec![
+            Span::styled("Tab  ", Style::default().fg(Color::Yellow)),
+            Span::raw("Expand/collapse windows"),
+        ]),
+        Line::from(vec![
+            Span::styled("?    ", Style::default().fg(Color::Yellow)),
+            Span::raw("Toggle this help"),
+        ]),
+        Line::from(vec![
+            Span::styled("q    ", Style::default().fg(Color::Yellow)),
+            Span::raw("Quit"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press any key to close",
+            Style::default().fg(Color::Gray),
+        )),
+    ];
+
+    let help = Paragraph::new(help_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Help ")
+                .style(Style::default().bg(Color::Black).fg(Color::White)),
+        )
+        .alignment(Alignment::Center);
+    frame.render_widget(help, popup_area);
 }
 
 fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
@@ -121,7 +256,8 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
                 if is_expanded {
                     if let Some(windows) = app.session_windows.get(&session.name) {
                         for window in windows {
-                            let window_line = format_window_line(window, available_width.saturating_sub(4));
+                            let window_line =
+                                format_window_line(window, available_width.saturating_sub(4));
                             items.push(
                                 ListItem::new(Line::from(format!("  ├─ {window_line}")))
                                     .style(Style::default().fg(Color::Cyan)),
@@ -140,7 +276,8 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
                 let tags = app.config.get_tags(&session.name);
 
                 let line = if tags.is_empty() {
-                    let session_text = format_session_line(session, available_width.saturating_sub(2));
+                    let session_text =
+                        format_session_line(session, available_width.saturating_sub(2));
                     Line::from(format!("{arrow} {session_text}"))
                 } else {
                     build_session_line_with_tags(session, arrow, &tags, available_width)
@@ -154,7 +291,8 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
                 if is_expanded {
                     if let Some(windows) = app.session_windows.get(&session.name) {
                         for window in windows {
-                            let window_line = format_window_line(window, available_width.saturating_sub(4));
+                            let window_line =
+                                format_window_line(window, available_width.saturating_sub(4));
                             items.push(
                                 ListItem::new(Line::from(format!("  ├─ {window_line}")))
                                     .style(Style::default().fg(Color::Cyan)),
@@ -200,9 +338,7 @@ fn build_highlighted_session_line<'a>(
     let mut spans: Vec<Span> = Vec::new();
     spans.push(Span::raw(prefix));
 
-    let highlight_style = Style::default()
-        .fg(Color::Red)
-        .add_modifier(Modifier::BOLD);
+    let highlight_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     let normal_style = Style::default();
 
     let indices_set: std::collections::HashSet<u32> = match_indices.iter().copied().collect();
@@ -219,11 +355,16 @@ fn build_highlighted_session_line<'a>(
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
             format!("[{tag}]"),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
-    spans.push(Span::raw(format!("  {} windows  {status}", session.windows)));
+    spans.push(Span::raw(format!(
+        "  {} windows  {status}",
+        session.windows
+    )));
     Line::from(spans)
 }
 
@@ -258,9 +399,7 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         .into_text()
         .unwrap_or_else(|_| ratatui::text::Text::raw("Failed to parse ANSI"));
 
-    let preview = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let preview = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
 
     frame.render_widget(preview, area);
 }
@@ -293,19 +432,22 @@ fn build_session_line_with_tags<'a>(
     };
     let indicator = if session.attached > 0 { "●" } else { "○" };
 
-    let mut spans: Vec<Span> = vec![
-        Span::raw(format!("{arrow} {indicator} {}", session.name)),
-    ];
+    let mut spans: Vec<Span> = vec![Span::raw(format!("{arrow} {indicator} {}", session.name))];
 
     for tag in tags {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
             format!("[{tag}]"),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
-    spans.push(Span::raw(format!("  {} windows  {status}", session.windows)));
+    spans.push(Span::raw(format!(
+        "  {} windows  {status}",
+        session.windows
+    )));
 
     Line::from(spans)
 }
@@ -351,11 +493,7 @@ mod tests {
     use super::*;
     use crate::app::App;
     use crate::types::Session;
-    use ratatui::{
-        backend::TestBackend,
-        buffer::Buffer,
-        Terminal,
-    };
+    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
 
     fn make_session(name: &str, windows: usize, attached: usize) -> Session {
         Session {
@@ -392,10 +530,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
 
         let mut app = App::new();
-        app.sessions = vec![
-            make_session("work", 2, 1),
-            make_session("personal", 1, 0),
-        ];
+        app.sessions = vec![make_session("work", 2, 1), make_session("personal", 1, 0)];
 
         terminal
             .draw(|f| render(f, &app))
@@ -436,7 +571,10 @@ mod tests {
             .expect("render should succeed");
 
         let text = buffer_to_text(terminal.backend().buffer());
-        assert!(text.contains(">>"), "selected row should include highlight symbol");
+        assert!(
+            text.contains(">>"),
+            "selected row should include highlight symbol"
+        );
     }
 
     #[test]
@@ -496,7 +634,11 @@ mod tests {
         use ansi_to_tui::IntoText;
         let ansi = b"\x1b[31mhello\x1b[0m world";
         let text = ansi.into_text().expect("basic ANSI should parse");
-        let plain: String = text.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.as_ref())).collect();
+        let plain: String = text
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
         assert!(plain.contains("hello"));
         assert!(plain.contains("world"));
     }
@@ -551,7 +693,10 @@ mod tests {
             .expect("render with empty preview should succeed");
 
         let text = buffer_to_text(terminal.backend().buffer());
-        assert!(text.contains("No preview available"), "empty preview should show fallback text");
+        assert!(
+            text.contains("No preview available"),
+            "empty preview should show fallback text"
+        );
     }
 
     #[test]
@@ -566,7 +711,10 @@ mod tests {
             .expect("render with no sessions should succeed");
 
         let text = buffer_to_text(terminal.backend().buffer());
-        assert!(text.contains("Preview") || text.contains("No preview"), "preview area should render gracefully with no sessions");
+        assert!(
+            text.contains("Preview") || text.contains("No preview"),
+            "preview area should render gracefully with no sessions"
+        );
     }
 
     #[test]
@@ -604,8 +752,14 @@ mod tests {
             .expect("render should succeed");
 
         let text = buffer_to_text(terminal.backend().buffer());
-        assert!(text.contains("editor"), "expanded session should show window name 'editor'");
-        assert!(text.contains("shell"), "expanded session should show window name 'shell'");
+        assert!(
+            text.contains("editor"),
+            "expanded session should show window name 'editor'"
+        );
+        assert!(
+            text.contains("shell"),
+            "expanded session should show window name 'shell'"
+        );
     }
 
     #[test]
@@ -633,7 +787,10 @@ mod tests {
 
         let text = buffer_to_text(terminal.backend().buffer());
         assert!(text.contains("work"), "session name should show");
-        assert!(!text.contains("editor"), "collapsed session should NOT show window names");
+        assert!(
+            !text.contains("editor"),
+            "collapsed session should NOT show window names"
+        );
     }
 
     #[test]
@@ -679,8 +836,14 @@ mod tests {
             .expect("render should succeed");
 
         let text = buffer_to_text(terminal.backend().buffer());
-        assert!(text.contains("▼") || text.contains("▾"), "expanded session should show down arrow");
-        assert!(text.contains("▶") || text.contains("▸"), "collapsed session should show right arrow");
+        assert!(
+            text.contains("▼") || text.contains("▾"),
+            "expanded session should show down arrow"
+        );
+        assert!(
+            text.contains("▶") || text.contains("▸"),
+            "collapsed session should show right arrow"
+        );
     }
 
     #[test]
@@ -699,6 +862,100 @@ mod tests {
         let text = buffer_to_text(terminal.backend().buffer());
         assert!(text.contains("Sessions"), "left pane should show Sessions");
         assert!(text.contains("Preview"), "right pane should show Preview");
-        assert!(text.contains("preview text here"), "preview content should be visible");
+        assert!(
+            text.contains("preview text here"),
+            "preview content should be visible"
+        );
+    }
+
+    #[test]
+    fn test_render_help_overlay() {
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("test", 1, 0)];
+        app.show_help = true;
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render with help overlay should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(
+            text.contains("Keybindings"),
+            "help overlay should show keybindings title"
+        );
+        assert!(
+            text.contains("Fuzzy search"),
+            "help overlay should list search keybinding"
+        );
+        assert!(
+            text.contains("Quit"),
+            "help overlay should list quit keybinding"
+        );
+    }
+
+    #[test]
+    fn test_render_error_in_status_bar() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.error_message = Some("tmux command failed".to_string());
+        app.error_time = Some(std::time::Instant::now());
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render with error should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(
+            text.contains("tmux command failed"),
+            "error should display in status bar"
+        );
+    }
+
+    #[test]
+    fn test_render_header_session_count() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("a", 1, 0), make_session("b", 1, 0)];
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(
+            text.contains("2 sessions"),
+            "header should show session count"
+        );
+    }
+
+    #[test]
+    fn test_render_status_bar_selected_info() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("mywork", 2, 1)];
+        app.selected = 0;
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(
+            text.contains("mywork"),
+            "status bar should show selected session name"
+        );
+        assert!(
+            text.contains("attached"),
+            "status bar should show attach status"
+        );
     }
 }

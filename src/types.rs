@@ -1,8 +1,8 @@
-/// Core types for tmx application.
+//! Core types for tmx application.
 
-/// Represents the current mode of the application.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum AppMode {
+    #[default]
     Normal,
     Search,
     Input(InputPurpose),
@@ -22,13 +22,6 @@ pub enum ConfirmAction {
     KillSession(String),
 }
 
-impl Default for AppMode {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
-/// Result type alias using anyhow for error handling.
 pub type AppResult<T> = anyhow::Result<T>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +47,7 @@ pub struct Window {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub struct Pane {
     pub id: String,
     pub window_id: String,

@@ -7,21 +7,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// Application configuration loaded from/saved to TOML file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
-    pub tags: HashMap<String, Vec<String>>, // session_name -> [tag1, tag2]
+    pub tags: HashMap<String, Vec<String>>,
     #[serde(default)]
-    pub groups: HashMap<String, Vec<String>>, // group_name -> [session_name1, ...]
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            tags: HashMap::new(),
-            groups: HashMap::new(),
-        }
-    }
+    pub groups: HashMap<String, Vec<String>>,
 }
 
 impl Config {
@@ -84,6 +75,7 @@ impl Config {
     }
 
     /// Remove a tag from a session.
+    #[allow(dead_code)]
     pub fn remove_tag(&mut self, session: &str, tag: &str) {
         if let Some(tags) = self.tags.get_mut(session) {
             tags.retain(|t| t != tag);
@@ -95,10 +87,7 @@ impl Config {
 
     /// Get tags for a session.
     pub fn get_tags(&self, session: &str) -> Vec<String> {
-        self.tags
-            .get(session)
-            .cloned()
-            .unwrap_or_default()
+        self.tags.get(session).cloned().unwrap_or_default()
     }
 
     /// Get all session names that have a given tag.
@@ -174,11 +163,17 @@ mod tests {
         fs::write(&path, "{{{{invalid toml content!!!!").expect("write should succeed");
 
         let config = Config::load_from(path.clone()).expect("load should not crash on corruption");
-        assert!(config.tags.is_empty(), "corrupted config should fall back to defaults");
+        assert!(
+            config.tags.is_empty(),
+            "corrupted config should fall back to defaults"
+        );
 
         // Original file should be renamed to .bak
         let bak_path = path.with_extension("toml.bak");
-        assert!(bak_path.exists(), "corrupted file should be renamed to .bak");
+        assert!(
+            bak_path.exists(),
+            "corrupted file should be renamed to .bak"
+        );
     }
 
     #[test]
@@ -189,7 +184,8 @@ mod tests {
         // Ensure file doesn't exist
         let _ = fs::remove_file(&path);
 
-        let config = Config::load_from(path.clone()).expect("load should succeed for missing config");
+        let config =
+            Config::load_from(path.clone()).expect("load should succeed for missing config");
         assert!(config.tags.is_empty());
 
         // File should have been created
@@ -256,7 +252,10 @@ mod tests {
 
         let config = Config::default();
         let result = config.save_to(&path);
-        assert!(result.is_err(), "saving to unwritable dir should fail gracefully");
+        assert!(
+            result.is_err(),
+            "saving to unwritable dir should fail gracefully"
+        );
     }
 
     /// Cleanup helper that removes a temp dir when dropped.
