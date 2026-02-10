@@ -1,5 +1,4 @@
 /// Application state and main loop for tmx.
-
 use std::time::Duration;
 
 use anyhow::Result;

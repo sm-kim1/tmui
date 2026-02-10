@@ -1,6 +1,5 @@
 /// Configuration management for tmx.
 /// Stub module — will be implemented in a later task.
-
 use serde::Deserialize;
 
 /// Application configuration loaded from TOML file.

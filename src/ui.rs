@@ -1,6 +1,5 @@
 /// UI rendering module for tmx.
 /// Currently renders an empty screen — widgets come in later tasks.
-
 use ratatui::Frame;
 
 use crate::app::App;
