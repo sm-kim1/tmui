@@ -1,4 +1,4 @@
-/// Fuzzy search module for tmx using nucleo-matcher.
+//! Fuzzy search module for tmx using nucleo-matcher.
 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -30,7 +30,12 @@ pub fn fuzzy_match_sessions(sessions: &[Session], query: &str) -> Vec<MatchResul
     }
 
     let mut matcher = Matcher::new(Config::DEFAULT);
-    let pattern = Pattern::new(query, CaseMatching::Ignore, Normalization::Smart, AtomKind::Fuzzy);
+    let pattern = Pattern::new(
+        query,
+        CaseMatching::Ignore,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+    );
 
     let mut results: Vec<MatchResult> = Vec::new();
     let mut buf = Vec::new();
@@ -86,7 +91,10 @@ mod tests {
             sessions[results[0].session_index].name, "work",
             "first result should be 'work'"
         );
-        assert!(results[0].score > 0, "exact match should have positive score");
+        assert!(
+            results[0].score > 0,
+            "exact match should have positive score"
+        );
     }
 
     #[test]
@@ -98,7 +106,10 @@ mod tests {
         ];
 
         let results = fuzzy_match_sessions(&sessions, "wrk");
-        assert!(!results.is_empty(), "partial match 'wrk' should match 'work'");
+        assert!(
+            !results.is_empty(),
+            "partial match 'wrk' should match 'work'"
+        );
         assert!(
             results
                 .iter()
@@ -116,11 +127,7 @@ mod tests {
         ];
 
         let results = fuzzy_match_sessions(&sessions, "");
-        assert_eq!(
-            results.len(),
-            3,
-            "empty query should return all sessions"
-        );
+        assert_eq!(results.len(), 3, "empty query should return all sessions");
         for r in &results {
             assert_eq!(r.score, 0, "empty query score should be 0");
         }

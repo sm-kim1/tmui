@@ -11,6 +11,7 @@ use crate::types::{AppResult, Pane, Session, Window};
 const SESSION_FORMAT: &str = "#{session_id}\x01#{session_name}\x01#{session_windows}\x01#{session_attached}\x01#{session_created}\x01#{session_last_attached}\x01#{session_group}\x01#{session_path}";
 const WINDOW_FORMAT: &str =
     "#{window_id}\x01#{session_id}\x01#{window_index}\x01#{window_name}\x01#{window_active}\x01#{pane_current_command}";
+#[allow(dead_code)]
 const PANE_FORMAT: &str = "#{pane_id}\x01#{window_id}\x01#{session_id}\x01#{pane_index}\x01#{pane_active}\x01#{pane_current_command}\x01#{pane_current_path}";
 const DELIMITER: char = '\x01';
 
@@ -32,11 +33,13 @@ pub async fn list_windows(session_name: &str) -> AppResult<Vec<Window>> {
     parse_windows(&output)
 }
 
+#[allow(dead_code)]
 pub async fn list_panes(target_window: &str) -> AppResult<Vec<Pane>> {
     let output = run_tmux(&["list-panes", "-F", PANE_FORMAT, "-t", target_window, "--"]).await?;
     parse_panes(&output)
 }
 
+#[allow(dead_code)]
 pub async fn create_session(name: &str, path: Option<&str>) -> AppResult<()> {
     let mut args = vec!["new-session", "-d", "-s", name];
     if let Some(path) = path {
@@ -46,11 +49,13 @@ pub async fn create_session(name: &str, path: Option<&str>) -> AppResult<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn kill_session(name: &str) -> AppResult<()> {
     run_tmux(&["kill-session", "-t", name, "--"]).await?;
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn rename_session(current_name: &str, new_name: &str) -> AppResult<()> {
     run_tmux(&["rename-session", "-t", current_name, "--", new_name]).await?;
     Ok(())
@@ -61,6 +66,7 @@ pub async fn switch_client(target_session: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn attach_session(target_session: &str) -> AppResult<()> {
     run_tmux(&["attach-session", "-t", target_session, "--"]).await?;
     Ok(())
@@ -90,6 +96,7 @@ pub fn is_inside_tmux() -> bool {
         .is_some_and(|value| !value.trim().is_empty())
 }
 
+#[allow(dead_code)]
 pub async fn has_session(name: &str) -> AppResult<bool> {
     match run_tmux(&["has-session", "-t", name, "--"]).await {
         Ok(_) => Ok(true),
@@ -207,6 +214,7 @@ fn parse_windows(output: &str) -> AppResult<Vec<Window>> {
     Ok(windows)
 }
 
+#[allow(dead_code)]
 fn parse_panes(output: &str) -> AppResult<Vec<Pane>> {
     let mut panes = Vec::new();
 
@@ -341,7 +349,10 @@ mod tests {
         let original = env::var("TMUX").ok();
 
         unsafe { env::set_var("TMUX", "/tmp/tmux-1000/default,12345,0") };
-        assert!(is_inside_tmux(), "should detect inside tmux when $TMUX is set");
+        assert!(
+            is_inside_tmux(),
+            "should detect inside tmux when $TMUX is set"
+        );
 
         match original {
             Some(val) => unsafe { env::set_var("TMUX", val) },
@@ -354,7 +365,10 @@ mod tests {
         let original = env::var("TMUX").ok();
 
         unsafe { env::remove_var("TMUX") };
-        assert!(!is_inside_tmux(), "should detect outside tmux when $TMUX is unset");
+        assert!(
+            !is_inside_tmux(),
+            "should detect outside tmux when $TMUX is unset"
+        );
 
         if let Some(val) = original {
             unsafe { env::set_var("TMUX", val) };
@@ -366,7 +380,10 @@ mod tests {
         let original = env::var("TMUX").ok();
 
         unsafe { env::set_var("TMUX", "") };
-        assert!(!is_inside_tmux(), "empty $TMUX should count as outside tmux");
+        assert!(
+            !is_inside_tmux(),
+            "empty $TMUX should count as outside tmux"
+        );
 
         match original {
             Some(val) => unsafe { env::set_var("TMUX", val) },

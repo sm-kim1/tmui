@@ -25,6 +25,9 @@ pub struct App {
     pub search_active: bool,
     pub config: Config,
     pub tag_filter: Option<String>,
+    pub show_help: bool,
+    pub error_message: Option<String>,
+    pub error_time: Option<Instant>,
     last_d_press: Option<Instant>,
     last_preview_update: Option<Instant>,
 }
@@ -47,6 +50,9 @@ impl App {
             search_active: false,
             config,
             tag_filter: None,
+            show_help: false,
+            error_message: None,
+            error_time: None,
             last_d_press: None,
             last_preview_update: None,
         }
@@ -110,17 +116,26 @@ impl App {
     }
 
     pub async fn handle_event(&mut self, event: Event) -> AppResult<()> {
-        if let Event::Key(key) = event {
-            if key.kind != KeyEventKind::Press {
-                return Ok(());
-            }
+        match event {
+            Event::Key(key) => {
+                if key.kind != KeyEventKind::Press {
+                    return Ok(());
+                }
 
-            match self.mode.clone() {
-                AppMode::Normal => self.handle_normal_mode(key).await?,
-                AppMode::Search => self.handle_search_mode(key).await?,
-                AppMode::Input(purpose) => self.handle_input_mode(key, purpose).await?,
-                AppMode::Confirm(action) => self.handle_confirm_mode(key, action).await?,
+                if self.show_help && key.code != KeyCode::Char('?') {
+                    self.show_help = false;
+                    return Ok(());
+                }
+
+                match self.mode.clone() {
+                    AppMode::Normal => self.handle_normal_mode(key).await?,
+                    AppMode::Search => self.handle_search_mode(key).await?,
+                    AppMode::Input(purpose) => self.handle_input_mode(key, purpose).await?,
+                    AppMode::Confirm(action) => self.handle_confirm_mode(key, action).await?,
+                }
             }
+            Event::Resize(_, _) => {}
+            _ => {}
         }
 
         Ok(())
@@ -189,7 +204,7 @@ impl App {
                             let _ = self.refresh_sessions().await;
                         }
                         Err(e) => {
-                            self.status_message = format!("Failed to detach: {e}");
+                            self.set_error(format!("Failed to detach: {e}"));
                         }
                     }
                 } else {
@@ -221,7 +236,7 @@ impl App {
                                 self.should_quit = true;
                             }
                             Err(e) => {
-                                self.status_message = format!("Failed to switch: {e}");
+                                self.set_error(format!("Failed to switch: {e}"));
                             }
                         }
                     } else {
@@ -257,7 +272,10 @@ impl App {
                     self.tag_filter = None;
                     self.selected = 0;
                 } else {
-                    let all_tags: Vec<String> = self.config.tags.values()
+                    let all_tags: Vec<String> = self
+                        .config
+                        .tags
+                        .values()
                         .flatten()
                         .cloned()
                         .collect::<std::collections::HashSet<_>>()
@@ -268,7 +286,8 @@ impl App {
                     } else {
                         self.mode = AppMode::Input(InputPurpose::FilterByTag);
                         self.input_buffer.clear();
-                        self.status_message = format!("Filter by tag (available: {})", all_tags.join(", "));
+                        self.status_message =
+                            format!("Filter by tag (available: {})", all_tags.join(", "));
                     }
                 }
                 self.clear_multi_key_state();
@@ -277,7 +296,9 @@ impl App {
                 self.toggle_expand();
                 if let Some(session) = self.sessions.get(self.selected) {
                     let name = session.name.clone();
-                    if self.expanded_sessions.contains(&name) && !self.session_windows.contains_key(&name) {
+                    if self.expanded_sessions.contains(&name)
+                        && !self.session_windows.contains_key(&name)
+                    {
                         if let Ok(windows) = tmux::list_windows(&name).await {
                             self.session_windows.insert(name, windows);
                         }
@@ -286,9 +307,7 @@ impl App {
                 self.clear_multi_key_state();
             }
             KeyCode::Char('?') => {
-                self.status_message =
-                    "Keys: Enter attach, j/k move, G/gg jump, n new, dd kill, D detach, r rename, / search, t tag, T filter, q quit"
-                        .to_string();
+                self.show_help = !self.show_help;
                 self.clear_multi_key_state();
             }
             _ => {
@@ -328,7 +347,7 @@ impl App {
                                 self.should_quit = true;
                             }
                             Err(e) => {
-                                self.status_message = format!("Failed to switch: {e}");
+                                self.set_error(format!("Failed to switch: {e}"));
                             }
                         }
                     } else {
@@ -458,6 +477,22 @@ impl App {
         }
     }
 
+    /// Set a transient error message that auto-clears after 3 seconds.
+    pub fn set_error(&mut self, msg: String) {
+        self.error_message = Some(msg);
+        self.error_time = Some(Instant::now());
+    }
+
+    /// Clear expired error messages (called on tick).
+    pub fn tick_clear_errors(&mut self) {
+        if let Some(time) = self.error_time {
+            if time.elapsed() >= Duration::from_secs(3) {
+                self.error_message = None;
+                self.error_time = None;
+            }
+        }
+    }
+
     fn clear_multi_key_state(&mut self) {
         self.last_g_press = None;
         self.last_d_press = None;
@@ -465,7 +500,9 @@ impl App {
 
     fn selected_session_name(&self) -> Option<String> {
         if self.search_active {
-            let idx = self.selected.min(self.filtered_results.len().saturating_sub(1));
+            let idx = self
+                .selected
+                .min(self.filtered_results.len().saturating_sub(1));
             self.filtered_results
                 .get(idx)
                 .and_then(|r| self.sessions.get(r.session_index))
@@ -473,11 +510,14 @@ impl App {
         } else if self.tag_filter.is_some() {
             let indices = self.tag_filtered_sessions();
             let idx = self.selected.min(indices.len().saturating_sub(1));
-            indices.get(idx)
+            indices
+                .get(idx)
                 .and_then(|&i| self.sessions.get(i))
                 .map(|s| s.name.clone())
         } else {
-            self.sessions.get(self.selected).map(|session| session.name.clone())
+            self.sessions
+                .get(self.selected)
+                .map(|session| session.name.clone())
         }
     }
 
@@ -570,7 +610,11 @@ mod tests {
     #[tokio::test]
     async fn test_ignore_key_release_events() {
         let mut app = App::new();
-        let release = make_key_with_kind(KeyCode::Char('q'), KeyModifiers::NONE, KeyEventKind::Release);
+        let release = make_key_with_kind(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
 
         app.handle_event(Event::Key(release))
             .await
@@ -591,9 +635,12 @@ mod tests {
     #[tokio::test]
     async fn test_app_quit_on_ctrl_c() {
         let mut app = App::new();
-        app.handle_event(Event::Key(make_key(KeyCode::Char('c'), KeyModifiers::CONTROL)))
-            .await
-            .expect("ctrl-c should be handled");
+        app.handle_event(Event::Key(make_key(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )))
+        .await
+        .expect("ctrl-c should be handled");
         assert!(app.should_quit);
     }
 
@@ -616,9 +663,12 @@ mod tests {
             .expect("k should move selection up");
         assert_eq!(app.selected, 0);
 
-        app.handle_event(Event::Key(make_key(KeyCode::Char('G'), KeyModifiers::SHIFT)))
-            .await
-            .expect("G should jump to last");
+        app.handle_event(Event::Key(make_key(
+            KeyCode::Char('G'),
+            KeyModifiers::SHIFT,
+        )))
+        .await
+        .expect("G should jump to last");
         assert_eq!(app.selected, 2);
 
         app.handle_event(Event::Key(make_key(KeyCode::Char('g'), KeyModifiers::NONE)))
@@ -652,10 +702,14 @@ mod tests {
             .await
             .expect("enter inside tmux should be handled");
 
+        let has_error = app
+            .error_message
+            .as_ref()
+            .is_some_and(|m| m.contains("Failed to switch"));
         assert!(
-            app.status_message.contains("Failed to switch")
-                || app.should_quit,
-            "should either fail gracefully or quit after switch: got '{}'",
+            has_error || app.should_quit,
+            "should either fail gracefully or quit after switch: error={:?}, status='{}'",
+            app.error_message,
             app.status_message
         );
 
@@ -668,9 +722,12 @@ mod tests {
     #[tokio::test]
     async fn test_detach_no_session() {
         let mut app = App::new();
-        app.handle_event(Event::Key(make_key(KeyCode::Char('D'), KeyModifiers::SHIFT)))
-            .await
-            .expect("D with no sessions should be handled");
+        app.handle_event(Event::Key(make_key(
+            KeyCode::Char('D'),
+            KeyModifiers::SHIFT,
+        )))
+        .await
+        .expect("D with no sessions should be handled");
         assert_eq!(app.status_message, "No session selected");
     }
 
@@ -724,5 +781,59 @@ mod tests {
             app.mode,
             AppMode::Confirm(ConfirmAction::KillSession("alpha".to_string()))
         );
+    }
+
+    #[tokio::test]
+    async fn test_help_overlay_toggle() {
+        let mut app = App::new();
+        assert!(!app.show_help);
+
+        app.handle_event(Event::Key(make_key(KeyCode::Char('?'), KeyModifiers::NONE)))
+            .await
+            .expect("? should toggle help");
+        assert!(app.show_help);
+
+        app.handle_event(Event::Key(make_key(KeyCode::Char('?'), KeyModifiers::NONE)))
+            .await
+            .expect("? should toggle help off");
+        assert!(!app.show_help);
+    }
+
+    #[tokio::test]
+    async fn test_help_overlay_dismiss_on_any_key() {
+        let mut app = App::new();
+        app.show_help = true;
+
+        app.handle_event(Event::Key(make_key(KeyCode::Char('j'), KeyModifiers::NONE)))
+            .await
+            .expect("any key should dismiss help");
+        assert!(!app.show_help);
+        assert!(!app.should_quit, "dismissing help should not quit");
+    }
+
+    #[tokio::test]
+    async fn test_resize_event_handled() {
+        let mut app = App::new();
+        app.handle_event(Event::Resize(80, 24))
+            .await
+            .expect("resize event should be handled");
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_error_auto_clear() {
+        let mut app = App::new();
+        app.set_error("test error".to_string());
+        assert!(app.error_message.is_some());
+
+        app.tick_clear_errors();
+        assert!(
+            app.error_message.is_some(),
+            "error should persist within 3s"
+        );
+
+        app.error_time = Some(Instant::now() - Duration::from_secs(4));
+        app.tick_clear_errors();
+        assert!(app.error_message.is_none(), "error should clear after 3s");
     }
 }
