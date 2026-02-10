@@ -14,8 +14,10 @@ pub struct App {
     pub should_quit: bool,
     pub input_buffer: String,
     pub status_message: String,
+    pub preview_content: String,
     pub last_g_press: Option<Instant>,
     last_d_press: Option<Instant>,
+    last_preview_update: Option<Instant>,
 }
 
 impl App {
@@ -27,8 +29,10 @@ impl App {
             should_quit: false,
             input_buffer: String::new(),
             status_message: String::new(),
+            preview_content: String::new(),
             last_g_press: None,
             last_d_press: None,
+            last_preview_update: None,
         }
     }
 
@@ -38,6 +42,24 @@ impl App {
             self.selected = 0;
         } else if self.selected >= self.sessions.len() {
             self.selected = self.sessions.len() - 1;
+        }
+        Ok(())
+    }
+
+    pub async fn refresh_preview(&mut self) -> AppResult<()> {
+        if let Some(session) = self.sessions.get(self.selected) {
+            let target = format!("{}:0", session.name);
+            match tmux::capture_pane(&target).await {
+                Ok(content) => {
+                    self.preview_content = content;
+                    self.last_preview_update = Some(Instant::now());
+                }
+                Err(_) => {
+                    self.preview_content = String::new();
+                }
+            }
+        } else {
+            self.preview_content = String::new();
         }
         Ok(())
     }

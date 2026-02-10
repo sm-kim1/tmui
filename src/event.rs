@@ -16,18 +16,24 @@ pub async fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Ap
     let mut events = spawn_event_channel();
 
     app.refresh_sessions().await?;
+    let _ = app.refresh_preview().await;
     terminal.draw(|frame| crate::ui::render(frame, app))?;
 
     while !app.should_quit {
         tokio::select! {
             _ = interval.tick() => {
                 app.refresh_sessions().await?;
+                let _ = app.refresh_preview().await;
                 terminal.draw(|frame| crate::ui::render(frame, app))?;
             }
             maybe_event = events.recv() => {
                 match maybe_event {
                     Some(Ok(event)) => {
+                        let previous_selected = app.selected;
                         app.handle_event(event).await?;
+                        if app.selected != previous_selected {
+                            let _ = app.refresh_preview().await;
+                        }
                         terminal.draw(|frame| crate::ui::render(frame, app))?;
                     }
                     Some(Err(error)) => {
