@@ -13,6 +13,8 @@ pub enum AppMode {
 pub enum InputPurpose {
     NewSession,
     RenameSession,
+    AddTag,
+    FilterByTag,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
