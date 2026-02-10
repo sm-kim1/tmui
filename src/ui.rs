@@ -32,8 +32,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_session_list(frame, app, main_chunks[0]);
     render_preview(frame, app, main_chunks[1]);
 
+    let tag_indicator = app.tag_filter.as_ref()
+        .map(|t| format!(" [tag:{t}]"))
+        .unwrap_or_default();
     let footer_text = match app.mode {
-        AppMode::Normal => format!("NORMAL | {}", app.status_message),
+        AppMode::Normal => format!("NORMAL{tag_indicator} | {}", app.status_message),
         AppMode::Search => format!("SEARCH /{}", app.input_buffer),
         AppMode::Input(_) => format!("INPUT  {}", app.input_buffer),
         AppMode::Confirm(_) => format!("CONFIRM | {}", app.status_message),
@@ -100,11 +103,13 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
             if let Some(session) = app.sessions.get(match_result.session_index) {
                 let is_expanded = app.expanded_sessions.contains(&session.name);
                 let arrow = if is_expanded { "▼" } else { "▶" };
+                let tags = app.config.get_tags(&session.name);
 
                 let line = build_highlighted_session_line(
                     session,
                     arrow,
                     &match_result.indices,
+                    &tags,
                     available_width,
                 );
 
@@ -127,25 +132,34 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
     } else {
-        for (i, session) in app.sessions.iter().enumerate() {
-            let is_expanded = app.expanded_sessions.contains(&session.name);
-            let arrow = if is_expanded { "▼" } else { "▶" };
-            let session_text = format_session_line(session, available_width.saturating_sub(2));
-            let line_text = format!("{arrow} {session_text}");
+        let visible_indices = app.tag_filtered_sessions();
+        for (vis_idx, &session_idx) in visible_indices.iter().enumerate() {
+            if let Some(session) = app.sessions.get(session_idx) {
+                let is_expanded = app.expanded_sessions.contains(&session.name);
+                let arrow = if is_expanded { "▼" } else { "▶" };
+                let tags = app.config.get_tags(&session.name);
 
-            if i == app.selected {
-                selected_item_index = Some(items.len());
-            }
-            items.push(ListItem::new(Line::from(line_text)));
+                let line = if tags.is_empty() {
+                    let session_text = format_session_line(session, available_width.saturating_sub(2));
+                    Line::from(format!("{arrow} {session_text}"))
+                } else {
+                    build_session_line_with_tags(session, arrow, &tags, available_width)
+                };
 
-            if is_expanded {
-                if let Some(windows) = app.session_windows.get(&session.name) {
-                    for window in windows {
-                        let window_line = format_window_line(window, available_width.saturating_sub(4));
-                        items.push(
-                            ListItem::new(Line::from(format!("  ├─ {window_line}")))
-                                .style(Style::default().fg(Color::Cyan)),
-                        );
+                if vis_idx == app.selected {
+                    selected_item_index = Some(items.len());
+                }
+                items.push(ListItem::new(line));
+
+                if is_expanded {
+                    if let Some(windows) = app.session_windows.get(&session.name) {
+                        for window in windows {
+                            let window_line = format_window_line(window, available_width.saturating_sub(4));
+                            items.push(
+                                ListItem::new(Line::from(format!("  ├─ {window_line}")))
+                                    .style(Style::default().fg(Color::Cyan)),
+                            );
+                        }
                     }
                 }
             }
@@ -171,6 +185,7 @@ fn build_highlighted_session_line<'a>(
     session: &Session,
     arrow: &str,
     match_indices: &[u32],
+    tags: &[String],
     _available_width: usize,
 ) -> Line<'a> {
     let status = if session.attached > 0 {
@@ -181,7 +196,6 @@ fn build_highlighted_session_line<'a>(
     let indicator = if session.attached > 0 { "●" } else { "○" };
 
     let prefix = format!("{arrow} {indicator} ");
-    let suffix = format!("  {} windows  {status}", session.windows);
 
     let mut spans: Vec<Span> = Vec::new();
     spans.push(Span::raw(prefix));
@@ -201,7 +215,15 @@ fn build_highlighted_session_line<'a>(
         }
     }
 
-    spans.push(Span::raw(suffix));
+    for tag in tags {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("[{tag}]"),
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    spans.push(Span::raw(format!("  {} windows  {status}", session.windows)));
     Line::from(spans)
 }
 
@@ -256,6 +278,36 @@ fn format_session_line(session: &Session, max_width: usize) -> String {
     );
 
     truncate_with_ellipsis(&full_line, max_width)
+}
+
+fn build_session_line_with_tags<'a>(
+    session: &Session,
+    arrow: &str,
+    tags: &[String],
+    _available_width: usize,
+) -> Line<'a> {
+    let status = if session.attached > 0 {
+        "attached"
+    } else {
+        "detached"
+    };
+    let indicator = if session.attached > 0 { "●" } else { "○" };
+
+    let mut spans: Vec<Span> = vec![
+        Span::raw(format!("{arrow} {indicator} {}", session.name)),
+    ];
+
+    for tag in tags {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("[{tag}]"),
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    spans.push(Span::raw(format!("  {} windows  {status}", session.windows)));
+
+    Line::from(spans)
 }
 
 fn format_window_line(window: &Window, max_width: usize) -> String {

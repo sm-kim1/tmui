@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::config::Config;
 use crate::search::{self, MatchResult};
 use crate::tmux;
 use crate::types::{AppMode, AppResult, ConfirmAction, InputPurpose, Session, Window};
@@ -22,12 +23,15 @@ pub struct App {
     pub session_windows: HashMap<String, Vec<Window>>,
     pub filtered_results: Vec<MatchResult>,
     pub search_active: bool,
+    pub config: Config,
+    pub tag_filter: Option<String>,
     last_d_press: Option<Instant>,
     last_preview_update: Option<Instant>,
 }
 
 impl App {
     pub fn new() -> Self {
+        let config = Config::load().unwrap_or_default();
         Self {
             sessions: Vec::new(),
             selected: 0,
@@ -41,6 +45,8 @@ impl App {
             session_windows: HashMap::new(),
             filtered_results: Vec::new(),
             search_active: false,
+            config,
+            tag_filter: None,
             last_d_press: None,
             last_preview_update: None,
         }
@@ -49,8 +55,24 @@ impl App {
     pub fn visible_session_count(&self) -> usize {
         if self.search_active {
             self.filtered_results.len()
+        } else if self.tag_filter.is_some() {
+            self.tag_filtered_sessions().len()
         } else {
             self.sessions.len()
+        }
+    }
+
+    pub fn tag_filtered_sessions(&self) -> Vec<usize> {
+        if let Some(ref tag) = self.tag_filter {
+            let tagged = self.config.sessions_with_tag(tag);
+            self.sessions
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| tagged.contains(&s.name))
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            (0..self.sessions.len()).collect()
         }
     }
 
@@ -219,6 +241,38 @@ impl App {
                 self.status_message = "Search mode".to_string();
                 self.clear_multi_key_state();
             }
+            KeyCode::Char('t') => {
+                if let Some(name) = self.selected_session_name() {
+                    self.mode = AppMode::Input(InputPurpose::AddTag);
+                    self.input_buffer.clear();
+                    self.status_message = format!("Add tag to `{name}`");
+                } else {
+                    self.status_message = "No session selected".to_string();
+                }
+                self.clear_multi_key_state();
+            }
+            KeyCode::Char('T') => {
+                if let Some(ref current) = self.tag_filter {
+                    self.status_message = format!("Tag filter `{current}` cleared");
+                    self.tag_filter = None;
+                    self.selected = 0;
+                } else {
+                    let all_tags: Vec<String> = self.config.tags.values()
+                        .flatten()
+                        .cloned()
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+                    if all_tags.is_empty() {
+                        self.status_message = "No tags defined".to_string();
+                    } else {
+                        self.mode = AppMode::Input(InputPurpose::FilterByTag);
+                        self.input_buffer.clear();
+                        self.status_message = format!("Filter by tag (available: {})", all_tags.join(", "));
+                    }
+                }
+                self.clear_multi_key_state();
+            }
             KeyCode::Tab => {
                 self.toggle_expand();
                 if let Some(session) = self.sessions.get(self.selected) {
@@ -233,7 +287,7 @@ impl App {
             }
             KeyCode::Char('?') => {
                 self.status_message =
-                    "Keys: Enter attach, j/k move, G/gg jump, n new, dd kill, D detach, r rename, / search, q quit"
+                    "Keys: Enter attach, j/k move, G/gg jump, n new, dd kill, D detach, r rename, / search, t tag, T filter, q quit"
                         .to_string();
                 self.clear_multi_key_state();
             }
@@ -337,6 +391,27 @@ impl App {
                             format!("Rename to `{value}` not yet implemented")
                         }
                     }
+                    InputPurpose::AddTag => {
+                        if value.is_empty() {
+                            "Tag name required".to_string()
+                        } else if let Some(session_name) = self.selected_session_name() {
+                            self.config.add_tag(&session_name, &value);
+                            let _ = self.config.save();
+                            format!("Tagged `{session_name}` with `{value}`")
+                        } else {
+                            "No session selected".to_string()
+                        }
+                    }
+                    InputPurpose::FilterByTag => {
+                        if value.is_empty() {
+                            self.tag_filter = None;
+                            "Tag filter cleared".to_string()
+                        } else {
+                            self.tag_filter = Some(value.clone());
+                            self.selected = 0;
+                            format!("Filtering by tag `{value}`")
+                        }
+                    }
                 };
                 self.input_buffer.clear();
             }
@@ -394,6 +469,12 @@ impl App {
             self.filtered_results
                 .get(idx)
                 .and_then(|r| self.sessions.get(r.session_index))
+                .map(|s| s.name.clone())
+        } else if self.tag_filter.is_some() {
+            let indices = self.tag_filtered_sessions();
+            let idx = self.selected.min(indices.len().saturating_sub(1));
+            indices.get(idx)
+                .and_then(|&i| self.sessions.get(i))
                 .map(|s| s.name.clone())
         } else {
             self.sessions.get(self.selected).map(|session| session.name.clone())
