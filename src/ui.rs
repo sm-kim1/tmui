@@ -1,8 +1,9 @@
+use ansi_to_tui::IntoText;
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -22,7 +23,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(header, chunks[0]);
 
-    render_session_list(frame, app, chunks[1]);
+    let main_chunks = Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ])
+    .split(chunks[1]);
+
+    render_session_list(frame, app, main_chunks[0]);
+    render_preview(frame, app, main_chunks[1]);
 
     let footer_text = match app.mode {
         AppMode::Normal => format!("NORMAL | {}", app.status_message),
@@ -80,6 +88,44 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
         );
 
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default().borders(Borders::ALL).title("Preview");
+
+    if app.preview_content.is_empty() {
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+
+        let centered = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .split(inner);
+
+        let empty = Paragraph::new("No preview available")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));
+        frame.render_widget(empty, centered[1]);
+        return;
+    }
+
+    let text = app
+        .preview_content
+        .as_bytes()
+        .into_text()
+        .unwrap_or_else(|_| ratatui::text::Text::raw("Failed to parse ANSI"));
+
+    let preview = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(preview, area);
 }
 
 fn format_session_line(session: &Session, max_width: usize) -> String {
@@ -267,5 +313,102 @@ mod tests {
 
         let text = buffer_to_text(terminal.backend().buffer());
         assert!(text.contains("NORMAL"));
+    }
+
+    #[test]
+    fn test_ansi_to_text_basic() {
+        use ansi_to_tui::IntoText;
+        let ansi = b"\x1b[31mhello\x1b[0m world";
+        let text = ansi.into_text().expect("basic ANSI should parse");
+        let plain: String = text.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.as_ref())).collect();
+        assert!(plain.contains("hello"));
+        assert!(plain.contains("world"));
+    }
+
+    #[test]
+    fn test_ansi_24bit_color() {
+        use ansi_to_tui::IntoText;
+        use ratatui::style::Color;
+        let ansi = b"\x1b[38;2;255;0;0mred text\x1b[0m";
+        let text = ansi.into_text().expect("24-bit ANSI should parse");
+        let span = &text.lines[0].spans[0];
+        assert_eq!(span.style.fg, Some(Color::Rgb(255, 0, 0)));
+        assert!(span.content.contains("red text"));
+    }
+
+    #[test]
+    fn test_preview_cjk_width() {
+        use unicode_width::UnicodeWidthStr;
+        let korean = "안녕하세요";
+        assert_eq!(UnicodeWidthStr::width(korean), 10);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("test", 1, 0)];
+        app.preview_content = format!("{korean}\n");
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render with CJK preview should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        for ch in korean.chars() {
+            assert!(
+                text.contains(ch),
+                "CJK char '{ch}' should appear in preview buffer"
+            );
+        }
+    }
+
+    #[test]
+    fn test_preview_empty_pane() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("test", 1, 0)];
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render with empty preview should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(text.contains("No preview available"), "empty preview should show fallback text");
+    }
+
+    #[test]
+    fn test_preview_nonexistent_session() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let app = App::new();
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render with no sessions should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(text.contains("Preview") || text.contains("No preview"), "preview area should render gracefully with no sessions");
+    }
+
+    #[test]
+    fn test_preview_layout_split() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("alpha", 1, 0)];
+        app.preview_content = "preview text here".to_string();
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(text.contains("Sessions"), "left pane should show Sessions");
+        assert!(text.contains("Preview"), "right pane should show Preview");
+        assert!(text.contains("preview text here"), "preview content should be visible");
     }
 }
