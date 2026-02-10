@@ -2,7 +2,7 @@ use ansi_to_tui::IntoText;
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
@@ -43,7 +43,9 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
-    if app.sessions.is_empty() {
+    let visible_count = app.visible_session_count();
+
+    if visible_count == 0 && !app.search_active {
         let block = Block::default().borders(Borders::ALL).title("Sessions");
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -66,29 +68,85 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    if visible_count == 0 && app.search_active {
+        let block = Block::default().borders(Borders::ALL).title("Sessions");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+
+        let centered = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .split(inner);
+
+        let empty = Paragraph::new("No matches found")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));
+        frame.render_widget(empty, centered[1]);
+        return;
+    }
+
     let available_width = area.width.saturating_sub(5) as usize;
     let mut items: Vec<ListItem> = Vec::new();
     let mut selected_item_index: Option<usize> = None;
 
-    for (i, session) in app.sessions.iter().enumerate() {
-        let is_expanded = app.expanded_sessions.contains(&session.name);
-        let arrow = if is_expanded { "▼" } else { "▶" };
-        let session_text = format_session_line(session, available_width.saturating_sub(2));
-        let line_text = format!("{arrow} {session_text}");
+    if app.search_active {
+        for (vis_idx, match_result) in app.filtered_results.iter().enumerate() {
+            if let Some(session) = app.sessions.get(match_result.session_index) {
+                let is_expanded = app.expanded_sessions.contains(&session.name);
+                let arrow = if is_expanded { "▼" } else { "▶" };
 
-        if i == app.selected {
-            selected_item_index = Some(items.len());
+                let line = build_highlighted_session_line(
+                    session,
+                    arrow,
+                    &match_result.indices,
+                    available_width,
+                );
+
+                if vis_idx == app.selected {
+                    selected_item_index = Some(items.len());
+                }
+                items.push(ListItem::new(line));
+
+                if is_expanded {
+                    if let Some(windows) = app.session_windows.get(&session.name) {
+                        for window in windows {
+                            let window_line = format_window_line(window, available_width.saturating_sub(4));
+                            items.push(
+                                ListItem::new(Line::from(format!("  ├─ {window_line}")))
+                                    .style(Style::default().fg(Color::Cyan)),
+                            );
+                        }
+                    }
+                }
+            }
         }
-        items.push(ListItem::new(Line::from(line_text)));
+    } else {
+        for (i, session) in app.sessions.iter().enumerate() {
+            let is_expanded = app.expanded_sessions.contains(&session.name);
+            let arrow = if is_expanded { "▼" } else { "▶" };
+            let session_text = format_session_line(session, available_width.saturating_sub(2));
+            let line_text = format!("{arrow} {session_text}");
 
-        if is_expanded {
-            if let Some(windows) = app.session_windows.get(&session.name) {
-                for window in windows {
-                    let window_line = format_window_line(window, available_width.saturating_sub(4));
-                    items.push(
-                        ListItem::new(Line::from(format!("  ├─ {window_line}")))
-                            .style(Style::default().fg(Color::Cyan)),
-                    );
+            if i == app.selected {
+                selected_item_index = Some(items.len());
+            }
+            items.push(ListItem::new(Line::from(line_text)));
+
+            if is_expanded {
+                if let Some(windows) = app.session_windows.get(&session.name) {
+                    for window in windows {
+                        let window_line = format_window_line(window, available_width.saturating_sub(4));
+                        items.push(
+                            ListItem::new(Line::from(format!("  ├─ {window_line}")))
+                                .style(Style::default().fg(Color::Cyan)),
+                        );
+                    }
                 }
             }
         }
@@ -107,6 +165,44 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
         );
 
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn build_highlighted_session_line<'a>(
+    session: &Session,
+    arrow: &str,
+    match_indices: &[u32],
+    _available_width: usize,
+) -> Line<'a> {
+    let status = if session.attached > 0 {
+        "attached"
+    } else {
+        "detached"
+    };
+    let indicator = if session.attached > 0 { "●" } else { "○" };
+
+    let prefix = format!("{arrow} {indicator} ");
+    let suffix = format!("  {} windows  {status}", session.windows);
+
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::raw(prefix));
+
+    let highlight_style = Style::default()
+        .fg(Color::Red)
+        .add_modifier(Modifier::BOLD);
+    let normal_style = Style::default();
+
+    let indices_set: std::collections::HashSet<u32> = match_indices.iter().copied().collect();
+
+    for (char_idx, ch) in session.name.chars().enumerate() {
+        if indices_set.contains(&(char_idx as u32)) {
+            spans.push(Span::styled(ch.to_string(), highlight_style));
+        } else {
+            spans.push(Span::styled(ch.to_string(), normal_style));
+        }
+    }
+
+    spans.push(Span::raw(suffix));
+    Line::from(spans)
 }
 
 fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
