@@ -6,37 +6,32 @@ mod tmux;
 mod types;
 mod ui;
 
-use anyhow::Result;
-
 use crate::app::App;
+use crate::types::AppResult;
 
-/// Install a panic hook that restores the terminal before printing the panic.
-/// This is CRITICAL — without it, a panic leaves the terminal in raw mode.
 fn install_panic_hook() {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        // Best-effort terminal restoration — ignore errors since we're panicking
         let _ = ratatui::restore();
         original_hook(panic_info);
     }));
 }
 
-/// Run the application. Separated from main() for clean error handling.
-fn run() -> Result<()> {
+async fn run() -> AppResult<()> {
     install_panic_hook();
 
     let mut terminal = ratatui::init();
     let mut app = App::new();
-    let result = app.run(&mut terminal);
+    let result = event::run_event_loop(&mut app, &mut terminal).await;
 
-    // Always restore terminal, even if app.run() returned an error
     ratatui::restore();
 
     result
 }
 
-fn main() -> Result<()> {
-    run()
+#[tokio::main]
+async fn main() -> AppResult<()> {
+    run().await
 }
 
 #[cfg(test)]
@@ -61,6 +56,7 @@ mod tests {
     fn test_app_creates_successfully() {
         let app = App::new();
         assert!(!app.should_quit);
+        assert!(app.sessions.is_empty());
     }
 
     #[test]

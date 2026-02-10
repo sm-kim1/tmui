@@ -1,10 +1,23 @@
 /// Core types for tmx application.
 
 /// Represents the current mode of the application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppMode {
-    /// Normal browsing mode
     Normal,
+    Search,
+    Input(InputPurpose),
+    Confirm(ConfirmAction),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputPurpose {
+    NewSession,
+    RenameSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfirmAction {
+    KillSession(String),
 }
 
 impl Default for AppMode {
@@ -56,6 +69,20 @@ mod tests {
     #[test]
     fn test_app_mode_default_is_normal() {
         assert_eq!(AppMode::default(), AppMode::Normal);
+    }
+
+    #[test]
+    fn test_mode_variants_construct() {
+        let search = AppMode::Search;
+        let input = AppMode::Input(InputPurpose::NewSession);
+        let confirm = AppMode::Confirm(ConfirmAction::KillSession("demo".to_string()));
+
+        assert_eq!(search, AppMode::Search);
+        assert_eq!(input, AppMode::Input(InputPurpose::NewSession));
+        assert_eq!(
+            confirm,
+            AppMode::Confirm(ConfirmAction::KillSession("demo".to_string()))
+        );
     }
 
     #[test]
