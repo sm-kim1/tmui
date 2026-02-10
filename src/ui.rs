@@ -9,7 +9,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::App;
-use crate::types::{AppMode, Session};
+use crate::types::{AppMode, Session, Window};
 
 pub fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::vertical([
@@ -67,16 +67,35 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let available_width = area.width.saturating_sub(5) as usize;
-    let items: Vec<ListItem> = app
-        .sessions
-        .iter()
-        .map(|session| ListItem::new(Line::from(format_session_line(session, available_width))))
-        .collect();
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut selected_item_index: Option<usize> = None;
+
+    for (i, session) in app.sessions.iter().enumerate() {
+        let is_expanded = app.expanded_sessions.contains(&session.name);
+        let arrow = if is_expanded { "▼" } else { "▶" };
+        let session_text = format_session_line(session, available_width.saturating_sub(2));
+        let line_text = format!("{arrow} {session_text}");
+
+        if i == app.selected {
+            selected_item_index = Some(items.len());
+        }
+        items.push(ListItem::new(Line::from(line_text)));
+
+        if is_expanded {
+            if let Some(windows) = app.session_windows.get(&session.name) {
+                for window in windows {
+                    let window_line = format_window_line(window, available_width.saturating_sub(4));
+                    items.push(
+                        ListItem::new(Line::from(format!("  ├─ {window_line}")))
+                            .style(Style::default().fg(Color::Cyan)),
+                    );
+                }
+            }
+        }
+    }
 
     let mut state = ListState::default();
-    if !app.sessions.is_empty() {
-        state.select(Some(app.selected.min(app.sessions.len() - 1)));
-    }
+    state.select(selected_item_index);
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title("Sessions"))
@@ -140,6 +159,15 @@ fn format_session_line(session: &Session, max_width: usize) -> String {
         session.name, session.windows
     );
 
+    truncate_with_ellipsis(&full_line, max_width)
+}
+
+fn format_window_line(window: &Window, max_width: usize) -> String {
+    let active_mark = if window.active { "*" } else { " " };
+    let full_line = format!(
+        "{}: {}{} ({})",
+        window.index, window.name, active_mark, window.active_command
+    );
     truncate_with_ellipsis(&full_line, max_width)
 }
 
@@ -391,6 +419,120 @@ mod tests {
 
         let text = buffer_to_text(terminal.backend().buffer());
         assert!(text.contains("Preview") || text.contains("No preview"), "preview area should render gracefully with no sessions");
+    }
+
+    #[test]
+    fn test_render_expanded_session_shows_windows() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("work", 2, 1)];
+        app.expanded_sessions.insert("work".to_string());
+        app.session_windows.insert(
+            "work".to_string(),
+            vec![
+                crate::types::Window {
+                    id: "@0".to_string(),
+                    session_id: "$0".to_string(),
+                    index: 0,
+                    name: "editor".to_string(),
+                    active: true,
+                    active_command: "vim".to_string(),
+                },
+                crate::types::Window {
+                    id: "@1".to_string(),
+                    session_id: "$0".to_string(),
+                    index: 1,
+                    name: "shell".to_string(),
+                    active: false,
+                    active_command: "bash".to_string(),
+                },
+            ],
+        );
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(text.contains("editor"), "expanded session should show window name 'editor'");
+        assert!(text.contains("shell"), "expanded session should show window name 'shell'");
+    }
+
+    #[test]
+    fn test_render_collapsed_session_hides_windows() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("work", 2, 1)];
+        app.session_windows.insert(
+            "work".to_string(),
+            vec![crate::types::Window {
+                id: "@0".to_string(),
+                session_id: "$0".to_string(),
+                index: 0,
+                name: "editor".to_string(),
+                active: true,
+                active_command: "vim".to_string(),
+            }],
+        );
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(text.contains("work"), "session name should show");
+        assert!(!text.contains("editor"), "collapsed session should NOT show window names");
+    }
+
+    #[test]
+    fn test_render_window_active_indicator() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("dev", 1, 0)];
+        app.expanded_sessions.insert("dev".to_string());
+        app.session_windows.insert(
+            "dev".to_string(),
+            vec![crate::types::Window {
+                id: "@0".to_string(),
+                session_id: "$0".to_string(),
+                index: 0,
+                name: "main".to_string(),
+                active: true,
+                active_command: "vim".to_string(),
+            }],
+        );
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(text.contains("*"), "active window should have * indicator");
+        assert!(text.contains("main"), "window name should display");
+    }
+
+    #[test]
+    fn test_render_expand_collapse_arrow() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        let mut app = App::new();
+        app.sessions = vec![make_session("alpha", 2, 0), make_session("beta", 1, 0)];
+        app.expanded_sessions.insert("alpha".to_string());
+
+        terminal
+            .draw(|f| render(f, &app))
+            .expect("render should succeed");
+
+        let text = buffer_to_text(terminal.backend().buffer());
+        assert!(text.contains("▼") || text.contains("▾"), "expanded session should show down arrow");
+        assert!(text.contains("▶") || text.contains("▸"), "collapsed session should show right arrow");
     }
 
     #[test]

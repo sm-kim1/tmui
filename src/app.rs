@@ -1,9 +1,10 @@
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::tmux;
-use crate::types::{AppMode, AppResult, ConfirmAction, InputPurpose, Session};
+use crate::types::{AppMode, AppResult, ConfirmAction, InputPurpose, Session, Window};
 
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(500);
 
@@ -16,6 +17,8 @@ pub struct App {
     pub status_message: String,
     pub preview_content: String,
     pub last_g_press: Option<Instant>,
+    pub expanded_sessions: HashSet<String>,
+    pub session_windows: HashMap<String, Vec<Window>>,
     last_d_press: Option<Instant>,
     last_preview_update: Option<Instant>,
 }
@@ -31,6 +34,8 @@ impl App {
             status_message: String::new(),
             preview_content: String::new(),
             last_g_press: None,
+            expanded_sessions: HashSet::new(),
+            session_windows: HashMap::new(),
             last_d_press: None,
             last_preview_update: None,
         }
@@ -194,6 +199,18 @@ impl App {
                 self.status_message = "Search mode".to_string();
                 self.clear_multi_key_state();
             }
+            KeyCode::Tab => {
+                self.toggle_expand();
+                if let Some(session) = self.sessions.get(self.selected) {
+                    let name = session.name.clone();
+                    if self.expanded_sessions.contains(&name) && !self.session_windows.contains_key(&name) {
+                        if let Ok(windows) = tmux::list_windows(&name).await {
+                            self.session_windows.insert(name, windows);
+                        }
+                    }
+                }
+                self.clear_multi_key_state();
+            }
             KeyCode::Char('?') => {
                 self.status_message =
                     "Keys: Enter attach, j/k move, G/gg jump, n new, dd kill, D detach, r rename, / search, q quit"
@@ -290,6 +307,17 @@ impl App {
         }
 
         Ok(())
+    }
+
+    pub fn toggle_expand(&mut self) {
+        if let Some(session) = self.sessions.get(self.selected) {
+            let name = session.name.clone();
+            if self.expanded_sessions.contains(&name) {
+                self.expanded_sessions.remove(&name);
+            } else {
+                self.expanded_sessions.insert(name);
+            }
+        }
     }
 
     fn clear_multi_key_state(&mut self) {
@@ -490,6 +518,38 @@ mod tests {
             .await
             .expect("D with no sessions should be handled");
         assert_eq!(app.status_message, "No session selected");
+    }
+
+    #[tokio::test]
+    async fn test_toggle_expand_session() {
+        let mut app = App::new();
+        app.sessions = vec![make_session("alpha"), make_session("beta")];
+        app.selected = 0;
+
+        // Initially no sessions expanded
+        assert!(app.expanded_sessions.is_empty());
+
+        // Tab expands selected session
+        app.handle_event(Event::Key(make_key(KeyCode::Tab, KeyModifiers::NONE)))
+            .await
+            .expect("Tab should toggle expand");
+        assert!(app.expanded_sessions.contains("alpha"));
+
+        // Tab again collapses it
+        app.handle_event(Event::Key(make_key(KeyCode::Tab, KeyModifiers::NONE)))
+            .await
+            .expect("Tab should toggle collapse");
+        assert!(!app.expanded_sessions.contains("alpha"));
+    }
+
+    #[tokio::test]
+    async fn test_toggle_expand_empty_sessions() {
+        let mut app = App::new();
+        // No sessions — Tab should not panic
+        app.handle_event(Event::Key(make_key(KeyCode::Tab, KeyModifiers::NONE)))
+            .await
+            .expect("Tab on empty sessions should be safe");
+        assert!(app.expanded_sessions.is_empty());
     }
 
     #[tokio::test]
