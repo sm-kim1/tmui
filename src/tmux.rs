@@ -20,12 +20,20 @@ pub async fn list_sessions() -> AppResult<Vec<Session>> {
 }
 
 pub async fn list_windows(session_name: &str) -> AppResult<Vec<Window>> {
-    let output = run_tmux(&["list-windows", "-F", WINDOW_FORMAT, "-t", session_name]).await?;
+    let output = run_tmux(&[
+        "list-windows",
+        "-F",
+        WINDOW_FORMAT,
+        "-t",
+        session_name,
+        "--",
+    ])
+    .await?;
     parse_windows(&output)
 }
 
 pub async fn list_panes(target_window: &str) -> AppResult<Vec<Pane>> {
-    let output = run_tmux(&["list-panes", "-F", PANE_FORMAT, "-t", target_window]).await?;
+    let output = run_tmux(&["list-panes", "-F", PANE_FORMAT, "-t", target_window, "--"]).await?;
     parse_panes(&output)
 }
 
@@ -39,7 +47,7 @@ pub async fn create_session(name: &str, path: Option<&str>) -> AppResult<()> {
 }
 
 pub async fn kill_session(name: &str) -> AppResult<()> {
-    run_tmux(&["kill-session", "-t", name]).await?;
+    run_tmux(&["kill-session", "-t", name, "--"]).await?;
     Ok(())
 }
 
@@ -49,17 +57,17 @@ pub async fn rename_session(current_name: &str, new_name: &str) -> AppResult<()>
 }
 
 pub async fn switch_client(target_session: &str) -> AppResult<()> {
-    run_tmux(&["switch-client", "-t", target_session]).await?;
+    run_tmux(&["switch-client", "-t", target_session, "--"]).await?;
     Ok(())
 }
 
 pub async fn attach_session(target_session: &str) -> AppResult<()> {
-    run_tmux(&["attach-session", "-t", target_session]).await?;
+    run_tmux(&["attach-session", "-t", target_session, "--"]).await?;
     Ok(())
 }
 
 pub async fn capture_pane(target_pane: &str) -> AppResult<String> {
-    run_tmux(&["capture-pane", "-p", "-t", target_pane]).await
+    run_tmux(&["capture-pane", "-p", "-t", target_pane, "--"]).await
 }
 
 pub fn is_inside_tmux() -> bool {
@@ -69,7 +77,7 @@ pub fn is_inside_tmux() -> bool {
 }
 
 pub async fn has_session(name: &str) -> AppResult<bool> {
-    match run_tmux(&["has-session", "-t", name]).await {
+    match run_tmux(&["has-session", "-t", name, "--"]).await {
         Ok(_) => Ok(true),
         Err(error) => {
             let message = error.to_string();

@@ -1,75 +1,77 @@
-/// Event handling for tmx.
-/// Provides crossterm event polling with async support.
 use std::time::Duration;
+use std::thread;
 
-use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use anyhow::anyhow;
+use crossterm::event::{self, Event};
+use ratatui::DefaultTerminal;
+use tokio::sync::mpsc;
 
-/// Poll for a crossterm event with a timeout.
-/// Returns `None` if no event is available within the timeout.
-pub fn poll_event(timeout: Duration) -> Result<Option<Event>> {
-    if event::poll(timeout)? {
-        Ok(Some(event::read()?))
-    } else {
-        Ok(None)
+use crate::app::App;
+use crate::types::AppResult;
+
+pub const TICK_RATE: Duration = Duration::from_millis(250);
+
+pub async fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> AppResult<()> {
+    let mut interval = tokio::time::interval(TICK_RATE);
+    let mut events = spawn_event_channel();
+
+    app.refresh_sessions().await?;
+    terminal.draw(|frame| crate::ui::render(frame, app))?;
+
+    while !app.should_quit {
+        tokio::select! {
+            _ = interval.tick() => {
+                app.refresh_sessions().await?;
+                terminal.draw(|frame| crate::ui::render(frame, app))?;
+            }
+            maybe_event = events.recv() => {
+                match maybe_event {
+                    Some(Ok(event)) => {
+                        app.handle_event(event).await?;
+                        terminal.draw(|frame| crate::ui::render(frame, app))?;
+                    }
+                    Some(Err(error)) => {
+                        return Err(anyhow!(error));
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+        }
     }
+
+    Ok(())
 }
 
-/// Check if a key event represents a quit action.
-pub fn is_quit(key: &KeyEvent) -> bool {
-    matches!(
-        key,
-        KeyEvent {
-            code: KeyCode::Char('q'),
-            modifiers: KeyModifiers::NONE,
-            ..
-        } | KeyEvent {
-            code: KeyCode::Char('c'),
-            modifiers: KeyModifiers::CONTROL,
-            ..
+fn spawn_event_channel() -> mpsc::UnboundedReceiver<std::io::Result<Event>> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+
+    thread::spawn(move || loop {
+        let event = event::read();
+        let should_stop = event.is_err();
+        if sender.send(event).is_err() {
+            break;
         }
-    )
+        if should_stop {
+            break;
+        }
+    });
+
+    receiver
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEventKind, KeyEventState};
 
-    fn make_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
-        KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
-        }
+    #[test]
+    fn test_event_loop_function_exists() {
+        let _ = run_event_loop;
     }
 
     #[test]
-    fn test_quit_on_q() {
-        let q_key = make_key(KeyCode::Char('q'), KeyModifiers::NONE);
-        assert!(is_quit(&q_key), "'q' key should trigger quit");
-    }
-
-    #[test]
-    fn test_quit_on_ctrl_c() {
-        let ctrl_c = make_key(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert!(is_quit(&ctrl_c), "Ctrl+C should trigger quit");
-    }
-
-    #[test]
-    fn test_no_quit_on_other_keys() {
-        let a_key = make_key(KeyCode::Char('a'), KeyModifiers::NONE);
-        assert!(!is_quit(&a_key), "'a' key should not trigger quit");
-
-        let enter_key = make_key(KeyCode::Enter, KeyModifiers::NONE);
-        assert!(!is_quit(&enter_key), "Enter should not trigger quit");
-    }
-
-    #[test]
-    fn test_no_quit_on_shift_q() {
-        // Shift+Q (uppercase Q) should not quit
-        let shift_q = make_key(KeyCode::Char('q'), KeyModifiers::SHIFT);
-        assert!(!is_quit(&shift_q), "Shift+Q should not trigger quit");
+    fn test_tick_rate_is_250ms() {
+        assert_eq!(TICK_RATE, Duration::from_millis(250));
     }
 }
