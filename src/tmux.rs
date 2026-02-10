@@ -66,6 +66,20 @@ pub async fn attach_session(target_session: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub async fn detach_client(session: &str) -> AppResult<()> {
+    run_tmux(&["detach-client", "-s", "--", session]).await?;
+    Ok(())
+}
+
+pub fn attach_session_exec(target: &str) -> ! {
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new("tmux")
+        .args(["attach-session", "-t", "--", target])
+        .exec();
+    eprintln!("Failed to attach: {error}");
+    std::process::exit(1);
+}
+
 pub async fn capture_pane(target_pane: &str) -> AppResult<String> {
     run_tmux(&["capture-pane", "-p", "-t", target_pane, "--"]).await
 }
@@ -320,6 +334,51 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "$2");
         assert_eq!(sessions[0].name, "valid");
+    }
+
+    #[test]
+    fn test_detect_inside_tmux() {
+        let original = env::var("TMUX").ok();
+
+        unsafe { env::set_var("TMUX", "/tmp/tmux-1000/default,12345,0") };
+        assert!(is_inside_tmux(), "should detect inside tmux when $TMUX is set");
+
+        match original {
+            Some(val) => unsafe { env::set_var("TMUX", val) },
+            None => unsafe { env::remove_var("TMUX") },
+        }
+    }
+
+    #[test]
+    fn test_detect_outside_tmux() {
+        let original = env::var("TMUX").ok();
+
+        unsafe { env::remove_var("TMUX") };
+        assert!(!is_inside_tmux(), "should detect outside tmux when $TMUX is unset");
+
+        if let Some(val) = original {
+            unsafe { env::set_var("TMUX", val) };
+        }
+    }
+
+    #[test]
+    fn test_detect_empty_tmux_var() {
+        let original = env::var("TMUX").ok();
+
+        unsafe { env::set_var("TMUX", "") };
+        assert!(!is_inside_tmux(), "empty $TMUX should count as outside tmux");
+
+        match original {
+            Some(val) => unsafe { env::set_var("TMUX", val) },
+            None => unsafe { env::remove_var("TMUX") },
+        }
+    }
+
+    #[test]
+    fn test_attach_session_exec_exists() {
+        // Verify attach_session_exec is callable (type-level test).
+        // We cannot actually call it since it replaces the process.
+        let _fn_ptr: fn(&str) -> ! = attach_session_exec;
     }
 
     #[tokio::test]

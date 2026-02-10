@@ -114,6 +114,22 @@ impl App {
                 }
                 self.last_g_press = None;
             }
+            KeyCode::Char('D') => {
+                if let Some(name) = self.selected_session_name() {
+                    match tmux::detach_client(&name).await {
+                        Ok(_) => {
+                            self.status_message = format!("Detached clients from `{name}`");
+                            let _ = self.refresh_sessions().await;
+                        }
+                        Err(e) => {
+                            self.status_message = format!("Failed to detach: {e}");
+                        }
+                    }
+                } else {
+                    self.status_message = "No session selected".to_string();
+                }
+                self.clear_multi_key_state();
+            }
             KeyCode::Char('n') => {
                 self.mode = AppMode::Input(InputPurpose::NewSession);
                 self.input_buffer.clear();
@@ -132,7 +148,19 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(name) = self.selected_session_name() {
-                    self.status_message = format!("Attach `{name}` not yet implemented");
+                    if tmux::is_inside_tmux() {
+                        match tmux::switch_client(&name).await {
+                            Ok(_) => {
+                                self.should_quit = true;
+                            }
+                            Err(e) => {
+                                self.status_message = format!("Failed to switch: {e}");
+                            }
+                        }
+                    } else {
+                        ratatui::restore();
+                        tmux::attach_session_exec(&name);
+                    }
                 } else {
                     self.status_message = "No session selected".to_string();
                 }
@@ -146,7 +174,7 @@ impl App {
             }
             KeyCode::Char('?') => {
                 self.status_message =
-                    "Keys: j/k move, G/gg jump, n new, dd kill, r rename, / search, q quit"
+                    "Keys: Enter attach, j/k move, G/gg jump, n new, dd kill, D detach, r rename, / search, q quit"
                         .to_string();
                 self.clear_multi_key_state();
             }
@@ -396,6 +424,50 @@ mod tests {
             .await
             .expect("second g should jump to first");
         assert_eq!(app.selected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_enter_no_session_selected() {
+        let mut app = App::new();
+        app.handle_event(Event::Key(make_key(KeyCode::Enter, KeyModifiers::NONE)))
+            .await
+            .expect("enter with no sessions should be handled");
+        assert_eq!(app.status_message, "No session selected");
+        assert!(!app.should_quit);
+    }
+
+    #[tokio::test]
+    async fn test_enter_inside_tmux_switch_fails_gracefully() {
+        let mut app = App::new();
+        app.sessions = vec![make_session("target")];
+
+        let original = std::env::var("TMUX").ok();
+        unsafe { std::env::set_var("TMUX", "/tmp/tmux-fake,99999,0") };
+
+        app.handle_event(Event::Key(make_key(KeyCode::Enter, KeyModifiers::NONE)))
+            .await
+            .expect("enter inside tmux should be handled");
+
+        assert!(
+            app.status_message.contains("Failed to switch")
+                || app.should_quit,
+            "should either fail gracefully or quit after switch: got '{}'",
+            app.status_message
+        );
+
+        match original {
+            Some(val) => unsafe { std::env::set_var("TMUX", val) },
+            None => unsafe { std::env::remove_var("TMUX") },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_detach_no_session() {
+        let mut app = App::new();
+        app.handle_event(Event::Key(make_key(KeyCode::Char('D'), KeyModifiers::SHIFT)))
+            .await
+            .expect("D with no sessions should be handled");
+        assert_eq!(app.status_message, "No session selected");
     }
 
     #[tokio::test]
