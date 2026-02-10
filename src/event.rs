@@ -1,6 +1,5 @@
 /// Event handling for tmx.
 /// Provides crossterm event polling with async support.
-
 use std::time::Duration;
 
 use anyhow::Result;
