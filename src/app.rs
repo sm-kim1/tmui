@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::search::{self, MatchResult};
 use crate::tmux;
 use crate::types::{AppMode, AppResult, ConfirmAction, InputPurpose, Session, Window};
 
@@ -19,6 +20,8 @@ pub struct App {
     pub last_g_press: Option<Instant>,
     pub expanded_sessions: HashSet<String>,
     pub session_windows: HashMap<String, Vec<Window>>,
+    pub filtered_results: Vec<MatchResult>,
+    pub search_active: bool,
     last_d_press: Option<Instant>,
     last_preview_update: Option<Instant>,
 }
@@ -36,9 +39,24 @@ impl App {
             last_g_press: None,
             expanded_sessions: HashSet::new(),
             session_windows: HashMap::new(),
+            filtered_results: Vec::new(),
+            search_active: false,
             last_d_press: None,
             last_preview_update: None,
         }
+    }
+
+    pub fn visible_session_count(&self) -> usize {
+        if self.search_active {
+            self.filtered_results.len()
+        } else {
+            self.sessions.len()
+        }
+    }
+
+    fn update_search_filter(&mut self) {
+        self.filtered_results = search::fuzzy_match_sessions(&self.sessions, &self.input_buffer);
+        self.selected = 0;
     }
 
     pub async fn refresh_sessions(&mut self) -> AppResult<()> {
@@ -196,6 +214,8 @@ impl App {
             KeyCode::Char('/') => {
                 self.mode = AppMode::Search;
                 self.input_buffer.clear();
+                self.search_active = true;
+                self.update_search_filter();
                 self.status_message = "Search mode".to_string();
                 self.clear_multi_key_state();
             }
@@ -230,18 +250,61 @@ impl App {
             KeyCode::Esc => {
                 self.mode = AppMode::Normal;
                 self.input_buffer.clear();
+                self.search_active = false;
+                self.filtered_results.clear();
                 self.status_message = "Search cancelled".to_string();
             }
             KeyCode::Enter => {
+                let target_name = if self.search_active && !self.filtered_results.is_empty() {
+                    let idx = self.selected.min(self.filtered_results.len() - 1);
+                    let session_idx = self.filtered_results[idx].session_index;
+                    self.sessions.get(session_idx).map(|s| s.name.clone())
+                } else {
+                    None
+                };
                 self.mode = AppMode::Normal;
-                self.status_message = format!("Search `{}` not yet implemented", self.input_buffer);
                 self.input_buffer.clear();
+                self.search_active = false;
+                self.filtered_results.clear();
+
+                if let Some(name) = target_name {
+                    if tmux::is_inside_tmux() {
+                        match tmux::switch_client(&name).await {
+                            Ok(_) => {
+                                self.should_quit = true;
+                            }
+                            Err(e) => {
+                                self.status_message = format!("Failed to switch: {e}");
+                            }
+                        }
+                    } else {
+                        ratatui::restore();
+                        tmux::attach_session_exec(&name);
+                    }
+                } else {
+                    self.status_message = "No match to attach".to_string();
+                }
             }
             KeyCode::Backspace => {
                 self.input_buffer.pop();
+                self.search_active = true;
+                self.update_search_filter();
+            }
+            KeyCode::Down => {
+                let count = self.visible_session_count();
+                if count > 0 {
+                    self.selected = (self.selected + 1).min(count - 1);
+                }
+            }
+            KeyCode::Up => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
             }
             KeyCode::Char(c) => {
                 self.input_buffer.push(c);
+                self.search_active = true;
+                self.update_search_filter();
             }
             _ => {}
         }
@@ -326,16 +389,25 @@ impl App {
     }
 
     fn selected_session_name(&self) -> Option<String> {
-        self.sessions.get(self.selected).map(|session| session.name.clone())
+        if self.search_active {
+            let idx = self.selected.min(self.filtered_results.len().saturating_sub(1));
+            self.filtered_results
+                .get(idx)
+                .and_then(|r| self.sessions.get(r.session_index))
+                .map(|s| s.name.clone())
+        } else {
+            self.sessions.get(self.selected).map(|session| session.name.clone())
+        }
     }
 
     fn select_next(&mut self) {
-        if self.sessions.is_empty() {
+        let count = self.visible_session_count();
+        if count == 0 {
             self.selected = 0;
             return;
         }
 
-        self.selected = (self.selected + 1).min(self.sessions.len() - 1);
+        self.selected = (self.selected + 1).min(count - 1);
     }
 
     fn select_previous(&mut self) {
@@ -349,12 +421,13 @@ impl App {
     }
 
     fn select_last(&mut self) {
-        if self.sessions.is_empty() {
+        let count = self.visible_session_count();
+        if count == 0 {
             self.selected = 0;
             return;
         }
 
-        self.selected = self.sessions.len() - 1;
+        self.selected = count - 1;
     }
 }
 
