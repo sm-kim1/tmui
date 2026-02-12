@@ -21,21 +21,13 @@ pub async fn list_sessions() -> AppResult<Vec<Session>> {
 }
 
 pub async fn list_windows(session_name: &str) -> AppResult<Vec<Window>> {
-    let output = run_tmux(&[
-        "list-windows",
-        "-F",
-        WINDOW_FORMAT,
-        "-t",
-        session_name,
-        "--",
-    ])
-    .await?;
+    let output = run_tmux(&["list-windows", "-F", WINDOW_FORMAT, "-t", session_name]).await?;
     parse_windows(&output)
 }
 
 #[allow(dead_code)]
 pub async fn list_panes(target_window: &str) -> AppResult<Vec<Pane>> {
-    let output = run_tmux(&["list-panes", "-F", PANE_FORMAT, "-t", target_window, "--"]).await?;
+    let output = run_tmux(&["list-panes", "-F", PANE_FORMAT, "-t", target_window]).await?;
     parse_panes(&output)
 }
 
@@ -51,43 +43,43 @@ pub async fn create_session(name: &str, path: Option<&str>) -> AppResult<()> {
 
 #[allow(dead_code)]
 pub async fn kill_session(name: &str) -> AppResult<()> {
-    run_tmux(&["kill-session", "-t", name, "--"]).await?;
+    run_tmux(&["kill-session", "-t", name]).await?;
     Ok(())
 }
 
 #[allow(dead_code)]
 pub async fn rename_session(current_name: &str, new_name: &str) -> AppResult<()> {
-    run_tmux(&["rename-session", "-t", current_name, "--", new_name]).await?;
+    run_tmux(&["rename-session", "-t", current_name, new_name]).await?;
     Ok(())
 }
 
 pub async fn switch_client(target_session: &str) -> AppResult<()> {
-    run_tmux(&["switch-client", "-t", target_session, "--"]).await?;
+    run_tmux(&["switch-client", "-t", target_session]).await?;
     Ok(())
 }
 
 #[allow(dead_code)]
 pub async fn attach_session(target_session: &str) -> AppResult<()> {
-    run_tmux(&["attach-session", "-t", target_session, "--"]).await?;
+    run_tmux(&["attach-session", "-t", target_session]).await?;
     Ok(())
 }
 
 pub async fn detach_client(session: &str) -> AppResult<()> {
-    run_tmux(&["detach-client", "-s", "--", session]).await?;
+    run_tmux(&["detach-client", "-s", session]).await?;
     Ok(())
 }
 
 pub fn attach_session_exec(target: &str) -> ! {
     use std::os::unix::process::CommandExt;
     let error = std::process::Command::new("tmux")
-        .args(["attach-session", "-t", "--", target])
+        .args(["attach-session", "-t", target])
         .exec();
     eprintln!("Failed to attach: {error}");
     std::process::exit(1);
 }
 
 pub async fn capture_pane(target_pane: &str) -> AppResult<String> {
-    run_tmux(&["capture-pane", "-p", "-t", target_pane, "--"]).await
+    run_tmux(&["capture-pane", "-p", "-t", target_pane]).await
 }
 
 pub fn is_inside_tmux() -> bool {
@@ -98,7 +90,7 @@ pub fn is_inside_tmux() -> bool {
 
 #[allow(dead_code)]
 pub async fn has_session(name: &str) -> AppResult<bool> {
-    match run_tmux(&["has-session", "-t", name, "--"]).await {
+    match run_tmux(&["has-session", "-t", name]).await {
         Ok(_) => Ok(true),
         Err(error) => {
             let message = error.to_string();

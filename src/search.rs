@@ -1,4 +1,4 @@
-//! Fuzzy search module for tmx using nucleo-matcher.
+//! Fuzzy search module for tmui using nucleo-matcher.
 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};

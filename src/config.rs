@@ -1,4 +1,4 @@
-/// Configuration management for tmx.
+/// Configuration management for tmui.
 /// Handles session tags and groups with XDG TOML persistence.
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,11 +16,11 @@ pub struct Config {
 }
 
 impl Config {
-    /// Returns the XDG config file path: ~/.config/tmx/config.toml
+    /// Returns the XDG config file path: ~/.config/tmui/config.toml
     pub fn config_path() -> PathBuf {
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("~/.config"))
-            .join("tmx");
+            .join("tmui");
         config_dir.join("config.toml")
     }
 
@@ -106,7 +106,7 @@ mod tests {
     use std::fs;
 
     fn temp_config_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("tmx-test").join(name);
+        let dir = std::env::temp_dir().join("tmui-test").join(name);
         let _ = fs::create_dir_all(&dir);
         dir.join("config.toml")
     }
@@ -146,8 +146,8 @@ mod tests {
         let path = Config::config_path();
         let path_str = path.to_string_lossy();
         assert!(
-            path_str.contains("tmx") && path_str.ends_with("config.toml"),
-            "config path should be in tmx dir and named config.toml, got: {path_str}"
+            path_str.contains("tmui") && path_str.ends_with("config.toml"),
+            "config path should be in tmui dir and named config.toml, got: {path_str}"
         );
     }
 
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn test_config_dir_unwritable() {
         // Use a path that should be unwritable
-        let path = PathBuf::from("/proc/tmx-test/config.toml");
+        let path = PathBuf::from("/proc/tmui-test/config.toml");
 
         let config = Config::default();
         let result = config.save_to(&path);

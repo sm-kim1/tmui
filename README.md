@@ -1,4 +1,4 @@
-# tmx
+# tmui
 
 A fast, vim-keyed TUI for managing tmux sessions. Built with Rust, [ratatui](https://ratatui.rs), and [nucleo](https://github.com/helix-editor/nucleo) fuzzy matching.
 
@@ -16,8 +16,8 @@ A fast, vim-keyed TUI for managing tmux sessions. Built with Rust, [ratatui](htt
 
 ```bash
 # Clone and build
-git clone https://github.com/youruser/tmx.git
-cd tmx
+git clone https://github.com/youruser/tmui.git
+cd tmui
 cargo build --release
 
 # Install to PATH
@@ -33,7 +33,7 @@ cargo install --path .
 
 ```bash
 # Launch inside or outside tmux
-tmx
+tmui
 ```
 
 ### Keybindings
@@ -62,7 +62,7 @@ tmx
 
 ## Configuration
 
-Config is stored at `~/.config/tmx/config.toml` (XDG). Tags and groups are persisted automatically.
+Config is stored at `~/.config/tmui/config.toml` (XDG). Tags and groups are persisted automatically.
 
 ```toml
 [tags]

@@ -1,4 +1,4 @@
-//! Core types for tmx application.
+//! Core types for tmui application.
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum AppMode {
@@ -20,6 +20,13 @@ pub enum InputPurpose {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmAction {
     KillSession(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FocusPanel {
+    #[default]
+    Sessions,
+    Windows,
 }
 
 pub type AppResult<T> = anyhow::Result<T>;

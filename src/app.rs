@@ -6,7 +6,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crate::config::Config;
 use crate::search::{self, MatchResult};
 use crate::tmux;
-use crate::types::{AppMode, AppResult, ConfirmAction, InputPurpose, Session, Window};
+use crate::types::{AppMode, AppResult, ConfirmAction, FocusPanel, InputPurpose, Session, Window};
 
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(500);
 
@@ -28,6 +28,8 @@ pub struct App {
     pub show_help: bool,
     pub error_message: Option<String>,
     pub error_time: Option<Instant>,
+    pub focus: FocusPanel,
+    pub selected_window: usize,
     last_d_press: Option<Instant>,
     last_preview_update: Option<Instant>,
 }
@@ -53,6 +55,8 @@ impl App {
             show_help: false,
             error_message: None,
             error_time: None,
+            focus: FocusPanel::Sessions,
+            selected_window: 0,
             last_d_press: None,
             last_preview_update: None,
         }
@@ -88,7 +92,14 @@ impl App {
     }
 
     pub async fn refresh_sessions(&mut self) -> AppResult<()> {
-        self.sessions = tmux::list_sessions().await?;
+        match tmux::list_sessions().await {
+            Ok(sessions) => {
+                self.sessions = sessions;
+            }
+            Err(_) => {
+                self.sessions.clear();
+            }
+        }
         if self.sessions.is_empty() {
             self.selected = 0;
         } else if self.selected >= self.sessions.len() {
@@ -99,7 +110,18 @@ impl App {
 
     pub async fn refresh_preview(&mut self) -> AppResult<()> {
         if let Some(session) = self.sessions.get(self.selected) {
-            let target = format!("{}:0", session.name);
+            let name = session.name.clone();
+
+            let window_index = match self.focus {
+                FocusPanel::Windows => self
+                    .session_windows
+                    .get(&name)
+                    .and_then(|wins| wins.get(self.selected_window))
+                    .map(|w| w.index)
+                    .unwrap_or(0),
+                FocusPanel::Sessions => 0,
+            };
+            let target = format!("{name}:{window_index}");
             match tmux::capture_pane(&target).await {
                 Ok(content) => {
                     self.preview_content = content;
@@ -107,6 +129,12 @@ impl App {
                 }
                 Err(_) => {
                     self.preview_content = String::new();
+                }
+            }
+
+            if let std::collections::hash_map::Entry::Vacant(e) = self.session_windows.entry(name) {
+                if let Ok(windows) = tmux::list_windows(e.key()).await {
+                    e.insert(windows);
                 }
             }
         } else {
@@ -161,20 +189,32 @@ impl App {
                 self.clear_multi_key_state();
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
+                match self.focus {
+                    FocusPanel::Sessions => self.select_next(),
+                    FocusPanel::Windows => self.select_next_window(),
+                }
                 self.clear_multi_key_state();
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.select_previous();
+                match self.focus {
+                    FocusPanel::Sessions => self.select_previous(),
+                    FocusPanel::Windows => self.select_previous_window(),
+                }
                 self.clear_multi_key_state();
             }
             KeyCode::Char('G') => {
-                self.select_last();
+                match self.focus {
+                    FocusPanel::Sessions => self.select_last(),
+                    FocusPanel::Windows => self.select_last_window(),
+                }
                 self.clear_multi_key_state();
             }
             KeyCode::Char('g') => {
                 if is_double_tap(self.last_g_press) {
-                    self.select_first();
+                    match self.focus {
+                        FocusPanel::Sessions => self.select_first(),
+                        FocusPanel::Windows => self.selected_window = 0,
+                    }
                     self.last_g_press = None;
                 } else {
                     self.last_g_press = Some(Instant::now());
@@ -229,9 +269,10 @@ impl App {
                 self.clear_multi_key_state();
             }
             KeyCode::Enter => {
-                if let Some(name) = self.selected_session_name() {
+                let target = self.attach_target();
+                if let Some(target) = target {
                     if tmux::is_inside_tmux() {
-                        match tmux::switch_client(&name).await {
+                        match tmux::switch_client(&target).await {
                             Ok(_) => {
                                 self.should_quit = true;
                             }
@@ -241,7 +282,7 @@ impl App {
                         }
                     } else {
                         ratatui::restore();
-                        tmux::attach_session_exec(&name);
+                        tmux::attach_session_exec(&target);
                     }
                 } else {
                     self.status_message = "No session selected".to_string();
@@ -249,6 +290,7 @@ impl App {
                 self.clear_multi_key_state();
             }
             KeyCode::Char('/') => {
+                self.focus = FocusPanel::Sessions;
                 self.mode = AppMode::Search;
                 self.input_buffer.clear();
                 self.search_active = true;
@@ -293,17 +335,10 @@ impl App {
                 self.clear_multi_key_state();
             }
             KeyCode::Tab => {
-                self.toggle_expand();
-                if let Some(session) = self.sessions.get(self.selected) {
-                    let name = session.name.clone();
-                    if self.expanded_sessions.contains(&name)
-                        && !self.session_windows.contains_key(&name)
-                    {
-                        if let Ok(windows) = tmux::list_windows(&name).await {
-                            self.session_windows.insert(name, windows);
-                        }
-                    }
-                }
+                self.focus = match self.focus {
+                    FocusPanel::Sessions => FocusPanel::Windows,
+                    FocusPanel::Windows => FocusPanel::Sessions,
+                };
                 self.clear_multi_key_state();
             }
             KeyCode::Char('?') => {
@@ -400,14 +435,34 @@ impl App {
                         if value.is_empty() {
                             "Session name required".to_string()
                         } else {
-                            format!("Create `{value}` not yet implemented")
+                            match tmux::create_session(&value, None).await {
+                                Ok(_) => {
+                                    let _ = self.refresh_sessions().await;
+                                    format!("Created session `{value}`")
+                                }
+                                Err(e) => {
+                                    self.set_error(format!("Failed to create: {e}"));
+                                    String::new()
+                                }
+                            }
                         }
                     }
                     InputPurpose::RenameSession => {
                         if value.is_empty() {
                             "Session name required".to_string()
+                        } else if let Some(old_name) = self.selected_session_name() {
+                            match tmux::rename_session(&old_name, &value).await {
+                                Ok(_) => {
+                                    let _ = self.refresh_sessions().await;
+                                    format!("Renamed `{old_name}` → `{value}`")
+                                }
+                                Err(e) => {
+                                    self.set_error(format!("Failed to rename: {e}"));
+                                    String::new()
+                                }
+                            }
                         } else {
-                            format!("Rename to `{value}` not yet implemented")
+                            "No session selected".to_string()
                         }
                     }
                     InputPurpose::AddTag => {
@@ -451,9 +506,16 @@ impl App {
             KeyCode::Char('y') | KeyCode::Enter => {
                 self.mode = AppMode::Normal;
                 self.status_message = match action {
-                    ConfirmAction::KillSession(name) => {
-                        format!("Kill `{name}` not yet implemented")
-                    }
+                    ConfirmAction::KillSession(name) => match tmux::kill_session(&name).await {
+                        Ok(_) => {
+                            let _ = self.refresh_sessions().await;
+                            format!("Killed session `{name}`")
+                        }
+                        Err(e) => {
+                            self.set_error(format!("Failed to kill: {e}"));
+                            String::new()
+                        }
+                    },
                 };
             }
             KeyCode::Char('n') | KeyCode::Esc => {
@@ -464,17 +526,6 @@ impl App {
         }
 
         Ok(())
-    }
-
-    pub fn toggle_expand(&mut self) {
-        if let Some(session) = self.sessions.get(self.selected) {
-            let name = session.name.clone();
-            if self.expanded_sessions.contains(&name) {
-                self.expanded_sessions.remove(&name);
-            } else {
-                self.expanded_sessions.insert(name);
-            }
-        }
     }
 
     /// Set a transient error message that auto-clears after 3 seconds.
@@ -527,17 +578,24 @@ impl App {
             self.selected = 0;
             return;
         }
-
+        let prev = self.selected;
         self.selected = (self.selected + 1).min(count - 1);
+        if self.selected != prev {
+            self.selected_window = 0;
+        }
     }
 
     fn select_previous(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
+            self.selected_window = 0;
         }
     }
 
     fn select_first(&mut self) {
+        if self.selected != 0 {
+            self.selected_window = 0;
+        }
         self.selected = 0;
     }
 
@@ -549,6 +607,46 @@ impl App {
         }
 
         self.selected = count - 1;
+    }
+
+    fn selected_windows(&self) -> Option<&Vec<Window>> {
+        self.selected_session_name()
+            .and_then(|name| self.session_windows.get(&name))
+    }
+
+    fn select_next_window(&mut self) {
+        if let Some(wins) = self.selected_windows() {
+            let count = wins.len();
+            if count > 0 {
+                self.selected_window = (self.selected_window + 1).min(count - 1);
+            }
+        }
+    }
+
+    fn select_previous_window(&mut self) {
+        if self.selected_window > 0 {
+            self.selected_window -= 1;
+        }
+    }
+
+    fn select_last_window(&mut self) {
+        if let Some(wins) = self.selected_windows() {
+            if !wins.is_empty() {
+                self.selected_window = wins.len() - 1;
+            }
+        }
+    }
+
+    fn attach_target(&self) -> Option<String> {
+        let session_name = self.selected_session_name()?;
+        match self.focus {
+            FocusPanel::Sessions => Some(session_name),
+            FocusPanel::Windows => {
+                let windows = self.session_windows.get(&session_name)?;
+                let win = windows.get(self.selected_window)?;
+                Some(format!("{}:{}", session_name, win.index))
+            }
+        }
     }
 }
 
@@ -732,31 +830,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_toggle_expand_session() {
+    async fn test_tab_switches_focus_panel() {
         let mut app = App::new();
         app.sessions = vec![make_session("alpha"), make_session("beta")];
         app.selected = 0;
 
-        // Initially no sessions expanded
-        assert!(app.expanded_sessions.is_empty());
+        assert_eq!(app.focus, crate::types::FocusPanel::Sessions);
 
-        // Tab expands selected session
         app.handle_event(Event::Key(make_key(KeyCode::Tab, KeyModifiers::NONE)))
             .await
-            .expect("Tab should toggle expand");
-        assert!(app.expanded_sessions.contains("alpha"));
+            .expect("Tab should switch to windows panel");
+        assert_eq!(app.focus, crate::types::FocusPanel::Windows);
 
-        // Tab again collapses it
         app.handle_event(Event::Key(make_key(KeyCode::Tab, KeyModifiers::NONE)))
             .await
-            .expect("Tab should toggle collapse");
-        assert!(!app.expanded_sessions.contains("alpha"));
+            .expect("Tab should switch back to sessions panel");
+        assert_eq!(app.focus, crate::types::FocusPanel::Sessions);
     }
 
     #[tokio::test]
-    async fn test_toggle_expand_empty_sessions() {
+    async fn test_tab_on_empty_sessions() {
         let mut app = App::new();
-        // No sessions — Tab should not panic
         app.handle_event(Event::Key(make_key(KeyCode::Tab, KeyModifiers::NONE)))
             .await
             .expect("Tab on empty sessions should be safe");

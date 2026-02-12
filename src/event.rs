@@ -15,7 +15,7 @@ pub async fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Ap
     let mut interval = tokio::time::interval(TICK_RATE);
     let mut events = spawn_event_channel();
 
-    app.refresh_sessions().await?;
+    let _ = app.refresh_sessions().await;
     let _ = app.refresh_preview().await;
     terminal.draw(|frame| crate::ui::render(frame, app))?;
 
@@ -23,7 +23,9 @@ pub async fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Ap
         tokio::select! {
             _ = interval.tick() => {
                 app.tick_clear_errors();
-                app.refresh_sessions().await?;
+                if let Err(e) = app.refresh_sessions().await {
+                    app.set_error(format!("Refresh failed: {e}"));
+                }
                 let _ = app.refresh_preview().await;
                 terminal.draw(|frame| crate::ui::render(frame, app))?;
             }
@@ -32,7 +34,9 @@ pub async fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Ap
                     Some(Ok(event)) => {
                         let is_resize = matches!(event, Event::Resize(_, _));
                         let previous_selected = app.selected;
-                        app.handle_event(event).await?;
+                        if let Err(e) = app.handle_event(event).await {
+                            app.set_error(format!("{e}"));
+                        }
                         if app.selected != previous_selected || is_resize {
                             let _ = app.refresh_preview().await;
                         }
