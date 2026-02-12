@@ -9,7 +9,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::App;
-use crate::types::{AppMode, Session, Window};
+use crate::types::{AppMode, ConfirmAction, FocusPanel, InputPurpose, Session, Window};
 
 pub fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::vertical([
@@ -21,12 +21,22 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     render_header(frame, app, chunks[0]);
 
-    let main_chunks = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+    let main_chunks = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(chunks[1]);
 
-    render_session_list(frame, app, main_chunks[0]);
+    let left_chunks = Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(main_chunks[0]);
+
+    render_session_list(frame, app, left_chunks[0]);
+    render_windows_panel(frame, app, left_chunks[1]);
     render_preview(frame, app, main_chunks[1]);
     render_status_bar(frame, app, chunks[2]);
+
+    match &app.mode {
+        AppMode::Input(purpose) => render_input_popup(frame, app, purpose.clone()),
+        AppMode::Confirm(action) => render_confirm_popup(frame, app, action.clone()),
+        _ => {}
+    }
 
     if app.show_help {
         render_help_overlay(frame);
@@ -39,7 +49,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         format!(" ({} sessions)", app.sessions.len())
     };
-    let header = Paragraph::new(format!("tmx{session_info} | ? help | q quit"))
+    let header = Paragraph::new(format!("tmui{session_info} | ? help | q quit"))
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(header, area);
 }
@@ -76,13 +86,11 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_default();
 
     let footer_text = match app.mode {
-        AppMode::Normal => format!(
+        AppMode::Normal | AppMode::Input(_) | AppMode::Confirm(_) => format!(
             "NORMAL{tag_indicator}{selected_info} | {}",
             app.status_message
         ),
         AppMode::Search => format!("SEARCH /{}", app.input_buffer),
-        AppMode::Input(_) => format!("INPUT  {}", app.input_buffer),
-        AppMode::Confirm(_) => format!("CONFIRM | {}", app.status_message),
     };
     let footer =
         Paragraph::new(footer_text).style(Style::default().bg(Color::Blue).fg(Color::White));
@@ -91,8 +99,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_help_overlay(frame: &mut Frame) {
     let area = frame.area();
-    let popup_width = 50u16.min(area.width.saturating_sub(4));
-    let popup_height = 18u16.min(area.height.saturating_sub(4));
+    let popup_width = 44u16.min(area.width.saturating_sub(4));
+    let popup_height = 20u16.min(area.height.saturating_sub(4));
 
     let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
     let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
@@ -100,91 +108,254 @@ fn render_help_overlay(frame: &mut Frame) {
 
     frame.render_widget(Clear, popup_area);
 
-    let help_lines = vec![
-        Line::from(Span::styled(
-            "Keybindings",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let sep_style = Style::default().fg(Color::DarkGray);
+
+    let bindings: &[(&str, &str)] = &[
+        ("j / k", "Move down / up"),
+        ("G", "Jump to last"),
+        ("g g", "Jump to first"),
+        ("Enter", "Attach / switch session"),
+        ("n", "New session"),
+        ("r", "Rename session"),
+        ("d d", "Kill session (confirm)"),
+        ("D", "Detach clients"),
+        ("/", "Fuzzy search"),
+        ("t", "Add tag to session"),
+        ("T", "Filter by tag / clear"),
+        ("Tab", "Expand / collapse windows"),
+        ("?", "Toggle this help"),
+        ("q", "Quit"),
+    ];
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "  Keybindings",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    for (key, desc) in bindings {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{key:<8}"), key_style),
+            Span::styled(" │ ", sep_style),
+            Span::raw(*desc),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Press any key to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let help = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Help ")
+            .style(Style::default().bg(Color::Black).fg(Color::White)),
+    );
+    frame.render_widget(help, popup_area);
+}
+
+fn render_input_popup(frame: &mut Frame, app: &App, purpose: InputPurpose) {
+    let area = frame.area();
+
+    let title = match purpose {
+        InputPurpose::NewSession => " New Session ",
+        InputPurpose::RenameSession => " Rename Session ",
+        InputPurpose::AddTag => " Add Tag ",
+        InputPurpose::FilterByTag => " Filter by Tag ",
+    };
+
+    let label = match purpose {
+        InputPurpose::NewSession => "Session name",
+        InputPurpose::RenameSession => "New name",
+        InputPurpose::AddTag => "Tag name",
+        InputPurpose::FilterByTag => "Tag",
+    };
+
+    let popup_width = 40u16.min(area.width.saturating_sub(4));
+    let popup_height = 5u16;
+    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let input_display = format!("{}▌", app.input_buffer);
+    let lines = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("j/k  ", Style::default().fg(Color::Yellow)),
-            Span::raw("Move down/up"),
+            Span::raw("  "),
+            Span::styled(format!("{label}: "), Style::default().fg(Color::DarkGray)),
+            Span::styled(input_display, Style::default().fg(Color::White)),
         ]),
-        Line::from(vec![
-            Span::styled("G    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Jump to last"),
-        ]),
-        Line::from(vec![
-            Span::styled("gg   ", Style::default().fg(Color::Yellow)),
-            Span::raw("Jump to first"),
-        ]),
-        Line::from(vec![
-            Span::styled("Enter", Style::default().fg(Color::Yellow)),
-            Span::raw(" Attach to session"),
-        ]),
-        Line::from(vec![
-            Span::styled("n    ", Style::default().fg(Color::Yellow)),
-            Span::raw("New session"),
-        ]),
-        Line::from(vec![
-            Span::styled("r    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Rename session"),
-        ]),
-        Line::from(vec![
-            Span::styled("dd   ", Style::default().fg(Color::Yellow)),
-            Span::raw("Kill session"),
-        ]),
-        Line::from(vec![
-            Span::styled("D    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Detach clients"),
-        ]),
-        Line::from(vec![
-            Span::styled("/    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Fuzzy search"),
-        ]),
-        Line::from(vec![
-            Span::styled("t    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Add tag"),
-        ]),
-        Line::from(vec![
-            Span::styled("T    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Filter by tag / clear"),
-        ]),
-        Line::from(vec![
-            Span::styled("Tab  ", Style::default().fg(Color::Yellow)),
-            Span::raw("Expand/collapse windows"),
-        ]),
-        Line::from(vec![
-            Span::styled("?    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Toggle this help"),
-        ]),
-        Line::from(vec![
-            Span::styled("q    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Quit"),
-        ]),
-        Line::from(""),
         Line::from(Span::styled(
-            "Press any key to close",
-            Style::default().fg(Color::Gray),
+            "  Enter: confirm  Esc: cancel",
+            Style::default().fg(Color::DarkGray),
         )),
     ];
 
-    let help = Paragraph::new(help_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Help ")
-                .style(Style::default().bg(Color::Black).fg(Color::White)),
-        )
-        .alignment(Alignment::Center);
-    frame.render_widget(help, popup_area);
+    let popup = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(title)
+            .title_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .style(Style::default().bg(Color::Black)),
+    );
+    frame.render_widget(popup, popup_area);
+}
+
+fn render_confirm_popup(frame: &mut Frame, _app: &App, action: ConfirmAction) {
+    let area = frame.area();
+
+    let message = match &action {
+        ConfirmAction::KillSession(name) => format!("Kill session `{name}`?"),
+    };
+
+    let popup_width = 40u16.min(area.width.saturating_sub(4));
+    let popup_height = 5u16;
+    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(message, Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(Span::styled(
+            "  y: confirm  n/Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let popup = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red))
+            .title(" Confirm ")
+            .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+            .style(Style::default().bg(Color::Black)),
+    );
+    frame.render_widget(popup, popup_area);
+}
+
+fn render_windows_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let session_name = if app.search_active {
+        app.filtered_results
+            .get(app.selected)
+            .and_then(|r| app.sessions.get(r.session_index))
+            .map(|s| s.name.clone())
+    } else {
+        app.sessions.get(app.selected).map(|s| s.name.clone())
+    };
+
+    let is_focused = app.focus == FocusPanel::Windows;
+
+    let title = session_name
+        .as_deref()
+        .map(|n| format!("Windows [{n}]"))
+        .unwrap_or_else(|| "Windows".to_string());
+
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title);
+
+    let windows = session_name
+        .as_deref()
+        .and_then(|n| app.session_windows.get(n));
+
+    match windows {
+        Some(wins) if !wins.is_empty() => {
+            let items: Vec<ListItem> = wins
+                .iter()
+                .map(|w| {
+                    let active = if w.active { "*" } else { " " };
+                    let text = format!(" {}{} {} ({})", w.index, active, w.name, w.active_command);
+                    let style = if w.active {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    ListItem::new(text).style(style)
+                })
+                .collect();
+
+            let mut state = ListState::default();
+            if is_focused {
+                state.select(Some(app.selected_window.min(wins.len().saturating_sub(1))));
+            }
+
+            let list = List::new(items)
+                .block(block)
+                .highlight_symbol(">> ")
+                .highlight_style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                );
+            frame.render_stateful_widget(list, area, &mut state);
+        }
+        _ => {
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            if inner.width > 0 && inner.height > 0 {
+                let msg = if session_name.is_some() {
+                    "No windows"
+                } else {
+                    "No session selected"
+                };
+                let p = Paragraph::new(msg)
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(Color::DarkGray));
+                let centered = Layout::vertical([
+                    Constraint::Fill(1),
+                    Constraint::Length(1),
+                    Constraint::Fill(1),
+                ])
+                .split(inner);
+                frame.render_widget(p, centered[1]);
+            }
+        }
+    }
 }
 
 fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
     let visible_count = app.visible_session_count();
+    let is_focused = app.focus == FocusPanel::Sessions;
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
 
     if visible_count == 0 && !app.search_active {
-        let block = Block::default().borders(Borders::ALL).title("Sessions");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title("Sessions");
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -207,7 +378,10 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     if visible_count == 0 && app.search_active {
-        let block = Block::default().borders(Borders::ALL).title("Sessions");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title("Sessions");
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -308,7 +482,12 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
     state.select(selected_item_index);
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Sessions"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title("Sessions"),
+        )
         .highlight_symbol(">> ")
         .highlight_style(
             Style::default()
@@ -526,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_render_session_list() {
-        let backend = TestBackend::new(80, 24);
+        let backend = TestBackend::new(120, 24);
         let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
 
         let mut app = App::new();
@@ -545,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_render_empty_list() {
-        let backend = TestBackend::new(80, 24);
+        let backend = TestBackend::new(120, 24);
         let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
 
         let app = App::new();
@@ -763,8 +942,8 @@ mod tests {
     }
 
     #[test]
-    fn test_render_collapsed_session_hides_windows() {
-        let backend = TestBackend::new(80, 24);
+    fn test_render_windows_panel_shows_selected_windows() {
+        let backend = TestBackend::new(120, 24);
         let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
 
         let mut app = App::new();
@@ -788,8 +967,8 @@ mod tests {
         let text = buffer_to_text(terminal.backend().buffer());
         assert!(text.contains("work"), "session name should show");
         assert!(
-            !text.contains("editor"),
-            "collapsed session should NOT show window names"
+            text.contains("editor"),
+            "windows panel should show window name for selected session"
         );
     }
 
