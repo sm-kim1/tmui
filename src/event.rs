@@ -17,6 +17,7 @@ pub async fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Ap
 
     let _ = app.refresh_sessions().await;
     let _ = app.refresh_preview().await;
+    terminal.clear()?;
     terminal.draw(|frame| crate::ui::render(frame, app))?;
 
     while !app.should_quit {
