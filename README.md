@@ -1,5 +1,7 @@
 # tmui
 
+[한국어](README_ko.md)
+
 A fast, vim-keyed TUI for managing tmux sessions. Built with Rust, [ratatui](https://ratatui.rs), and [nucleo](https://github.com/helix-editor/nucleo) fuzzy matching.
 
 ## Features
@@ -20,12 +22,12 @@ cd tmui
 ./install.sh
 ```
 
-`install.sh`는 다음을 수행합니다:
+`install.sh` performs the following:
 
-1. `cargo build --release`로 바이너리 빌드
-2. `~/.cargo/bin/`에 바이너리 설치
-3. `.tmux.conf`를 `~/`에 복사 (기존 파일은 `.tmux.conf.bak`으로 백업)
-4. tmux 실행 중이면 설정 자동 리로드
+1. Builds the binary with `cargo build --release`
+2. Installs the binary to `~/.cargo/bin/`
+3. Copies `.tmux.conf` to `~/` (backs up existing file as `.tmux.conf.bak`)
+4. Reloads tmux config automatically if tmux is running
 
 ### Requirements
 
@@ -34,14 +36,14 @@ cd tmui
 
 ## tmux Integration
 
-설치 후 tmux에서 `prefix + s`를 누르면 기본 세션 목록(`choose-tree`) 대신 tmui가 팝업으로 실행됩니다.
+After installation, pressing `prefix + s` in tmux launches tmui as a popup instead of the default session list (`choose-tree`).
 
 ```tmux
 # .tmux.conf
 bind s display-popup -E -w 80% -h 80% tmui
 ```
 
-> 기본 prefix는 `Ctrl + a`입니다.
+> The default prefix is `Ctrl + a`.
 
 ## Usage
 
