@@ -15,19 +15,33 @@ A fast, vim-keyed TUI for managing tmux sessions. Built with Rust, [ratatui](htt
 ## Installation
 
 ```bash
-# Clone and build
-git clone https://github.com/youruser/tmui.git
+git clone https://github.com/sm-kim1/tmui.git
 cd tmui
-cargo build --release
-
-# Install to PATH
-cargo install --path .
+./install.sh
 ```
+
+`install.sh`는 다음을 수행합니다:
+
+1. `cargo build --release`로 바이너리 빌드
+2. `~/.cargo/bin/`에 바이너리 설치
+3. `.tmux.conf`를 `~/`에 복사 (기존 파일은 `.tmux.conf.bak`으로 백업)
+4. tmux 실행 중이면 설정 자동 리로드
 
 ### Requirements
 
 - Rust 1.70+
 - tmux (any recent version)
+
+## tmux Integration
+
+설치 후 tmux에서 `prefix + s`를 누르면 기본 세션 목록(`choose-tree`) 대신 tmui가 팝업으로 실행됩니다.
+
+```tmux
+# .tmux.conf
+bind s display-popup -E -w 80% -h 80% tmui
+```
+
+> 기본 prefix는 `Ctrl + a`입니다.
 
 ## Usage
 
